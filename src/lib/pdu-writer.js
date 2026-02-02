@@ -7,6 +7,33 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ✅ helper: ดึงเลข port จาก key เช่น "Port12" => 12
+function parsePortKey(k) {
+  const m = /^Port(\d+)$/i.exec(String(k || "").trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ✅ helper: หา max port จาก outletsDetail
+function getMaxPortFromOutletsDetail(outletsDetail, fallback = 8) {
+  if (!outletsDetail || typeof outletsDetail !== "object") return fallback;
+
+  let max = 0;
+  for (const k of Object.keys(outletsDetail)) {
+    const n = parsePortKey(k);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+
+  // ถ้าไม่มี PortX เลย ให้ fallback
+  if (!max) return fallback;
+
+  // กันค่าหลุดแบบ Port999
+  if (max > 64) max = 64;
+
+  return max;
+}
+
 // หา/สร้าง device แล้วคืน id
 async function ensureDevice({ name, ip, model, community }) {
   const q = `
@@ -87,8 +114,12 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
   // outletsDetail ตัวอย่าง: { Port1:"ON", Port2:"OFF", ... }
   const polledAt = new Date();
 
-  for (let i = 1; i <= 8; i++) {
-    const status = outletsDetail?.[`Port${i}`] || null;
+  // ✅ เดิม fix 8 -> เปลี่ยนเป็น dynamic (เช่น BAWORN จะได้ 12)
+  const outletCount = getMaxPortFromOutletsDetail(outletsDetail, 8);
+
+  for (let i = 1; i <= outletCount; i++) {
+    // ถ้าไม่มี key PortX จะเป็น null (ปลอดภัยกว่า ไม่เดา)
+    const status = outletsDetail?.[`Port${i}`] ?? null;
 
     // ensure outlet row
     const { rows } = await pool.query(
@@ -104,8 +135,7 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
 
     const outletId = rows[0].id;
 
-    // outlet current (NOTE: ตอนนี้คุณ drop current/power/alarm แล้วใช่ไหม?
-    // ถ้าคุณลบคอลัมน์พวกนี้ไปแล้ว ให้ใช้ query แบบ "status + updated_at" เท่านั้น
+    // outlet current
     await pool.query(
       `
       INSERT INTO pdu_outlet_status_current (outlet_id, status, updated_at)
@@ -138,7 +168,9 @@ async function savePollResult(pduConfig, result) {
     pduConfig.host;
 
   if (!ip) {
-    throw new Error(`Missing IP for ${result?.name || pduConfig?.name || "unknown PDU"}`);
+    throw new Error(
+      `Missing IP for ${result?.name || pduConfig?.name || "unknown PDU"}`
+    );
   }
 
   // ✅ model: เอาจาก result ก่อน ถ้าไม่มีเอาจาก config

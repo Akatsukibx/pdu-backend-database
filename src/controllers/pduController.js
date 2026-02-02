@@ -6,12 +6,11 @@ const moment = require('moment'); // ถ้าไม่มีให้ npm insta
 exports.getDashboardOverview = async (req, res) => {
     try {
         const query = `
-            SELECT d.id, d.name, d.ip_address, d.model, d.status AS connection_status,
-                   d.last_seen, s.voltage, s.current, s.power, s.temperature, s.alarm, s.updated_at
-            FROM pdu_devices d
-            LEFT JOIN pdu_status_current s ON d.id = s.pdu_id
-            ORDER BY d.id ASC;
-        `;
+  SELECT *
+  FROM public.v_pdu_show_name_device_api
+  ORDER BY id ASC;
+`;
+console.log("[API] dashboard query = v_pdu_show_name_device");
         const result = await pool.query(query);
         res.json(result.rows);
     } catch (err) {
