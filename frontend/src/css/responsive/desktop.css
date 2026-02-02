@@ -1,0 +1,35 @@
+/* Desktop / Large Screen Styles (1440px +)
+   Includes: Large Monitors, High-Res Laptops (15"+), 4K Screens
+   Target: Wide layout (4+ columns), contained max-width, spacious
+*/
+
+@media screen and (min-width: 1440px) {
+
+    /* Container Constraint for Ultra-Wide */
+
+
+    /* Grid System - Spacious */
+    .room-grid {
+        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+        /* Wider cards for better data density display */
+        gap: 2rem;
+    }
+
+    /* Enhanced Spacing */
+    .content-scroll {
+        padding: 3rem;
+    }
+
+    .panel {
+        padding: 2rem;
+    }
+
+    /* Typography Scaling */
+    h2.page-title {
+        font-size: 1.75rem;
+    }
+
+    .metric-val {
+        font-size: 1.4rem;
+    }
+}

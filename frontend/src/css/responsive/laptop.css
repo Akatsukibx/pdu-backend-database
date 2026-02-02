@@ -1,0 +1,30 @@
+/* Laptop / Landscape Tablet Styles (1024px - 1439px)
+   Includes: iPad Pro Landscape, Small Laptops (13"), Standard Laptops (14")
+   Target: Balanced 3-column layout, standard sidebar
+*/
+
+@media screen and (min-width: 1024px) and (max-width: 1439px) {
+
+    /* Restore Standard Sidebar */
+    .sidebar {
+        width: var(--sidebar-width);
+        /* Default 260px */
+    }
+
+    /* Grid System */
+    .room-grid {
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        /* Flexible but often results in 3 columns on this size */
+        gap: 1.5rem;
+    }
+
+    /* Panel Layout */
+    .panel {
+        padding: 1.5rem;
+    }
+
+    /* Typography */
+    .page-title {
+        font-size: 1.4rem;
+    }
+}

@@ -1,0 +1,39 @@
+/* Tablet / iPad Portrait Styles (768px - 1023px)
+   Includes: iPad Mini, iPad Air, Regular Tablets in Portrait
+   Target: Two-column layout, visible sidebar but compact
+*/
+
+@media screen and (min-width: 768px) and (max-width: 1023px) {
+
+    /* Layout */
+    .sidebar {
+        width: 200px;
+        /* Narrower sidebar to save space */
+    }
+
+    :root {
+        --sidebar-width: 200px;
+        /* Update variable if used globally */
+    }
+
+    /* Grid System */
+    .room-grid {
+        grid-template-columns: repeat(2, 1fr);
+        /* Strict 2 columns */
+        gap: 1.25rem;
+    }
+
+    /* Content Area */
+    .content-scroll {
+        padding: 1.5rem;
+    }
+
+    /* Metrics */
+    .metric-group {
+        gap: 1rem;
+    }
+
+    .metric-val {
+        font-size: 1.1rem;
+    }
+}
