@@ -37,4 +37,27 @@ module.exports = {
       energy: 0.01, // ÷100 => kWh
     },
   },
+
+  apc: {
+    root: "1.3.6.1.4.1.318.1.1.12",
+    map: {
+        // 1. Current: มี OID จริง (ค่ามาเป็น int ต้อง /10 ใน logic)
+        current: "1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1", 
+
+        // 2. Voltage: ไม่มี OID จริง (ใช้ค่าคงที่ 220V หรือ 230V ตามไฟ Data Center)
+        // แนะนำให้ใส่เป็น null หรือ string พิเศษ เพื่อให้ logic รู้ว่าต้อง Fix ค่า
+        voltage: "FIXED_220", 
+
+        // 3. Power: คำนวณจาก Voltage * Current
+        power: "CALCULATED", 
+
+        // 4. Energy: รุ่นนี้ไม่เก็บ Energy สะสม (Accumulated kWh)
+        // แนะนำให้ใส่ 0 หรือ null
+        energy: null, 
+
+        // 5. Outlet Base
+        outletBase: "1.3.6.1.4.1.318.1.1.12.3.3.1.1.4", 
+    },
+},
+
 };
