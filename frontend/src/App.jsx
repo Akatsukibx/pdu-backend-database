@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
+// App.jsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import NodeView from './components/NodeView';
 import RoomView from './components/RoomView';
 import DashboardView from './components/DashboardView';
 import { fetchPDUList } from './api/pduService';
+
+const REFRESH_MS = 300000; // ✅ ดึงข้อมูลใหม่ทุก 5 นาที
+const CLOCK_MS = 1000;   // ✅ ให้ clock เดินจริง
 
 const App = () => {
     const [selectedNode, setSelectedNode] = useState(null);
@@ -12,19 +16,46 @@ const App = () => {
     const [loaded, setLoaded] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-    // Fetch basic list on mount
+    // ✅ Clock state (ถ้าไม่ทำ state เวลาจะค้าง เพราะ React ไม่ re-render เอง)
+    const [now, setNow] = useState(() => new Date());
+
+    // ✅ กันยิงซ้อน (กรณี API ตอบช้าแล้ว interval ยิงซ้ำ)
+    const isFetchingListRef = useRef(false);
+
+    const loadList = useCallback(async (isFirstLoad = false) => {
+        // กันยิงซ้อน
+        if (isFetchingListRef.current) return;
+
+        // กันยิงตอน tab ไม่ได้ active (ลดภาระ backend)
+        if (!isFirstLoad && document.hidden) return;
+
+        isFetchingListRef.current = true;
+        try {
+            const list = await fetchPDUList();
+            setPduList(list);
+        } catch (error) {
+            console.error("Failed to load PDU list", error);
+        } finally {
+            isFetchingListRef.current = false;
+            if (isFirstLoad) setLoaded(true);
+        }
+    }, []);
+
+    // ✅ Fetch basic list on mount + polling
     useEffect(() => {
-        const loadList = async () => {
-            try {
-                const list = await fetchPDUList();
-                setPduList(list);
-            } catch (error) {
-                console.error("Failed to load PDU list", error);
-            } finally {
-                setLoaded(true);
-            }
-        };
-        loadList();
+        loadList(true); // โหลดครั้งแรก
+
+        const interval = setInterval(() => {
+            loadList(false); // โหลดซ้ำ
+        }, REFRESH_MS);
+
+        return () => clearInterval(interval);
+    }, [loadList]);
+
+    // ✅ clock ticking
+    useEffect(() => {
+        const t = setInterval(() => setNow(new Date()), CLOCK_MS);
+        return () => clearInterval(t);
     }, []);
 
     const handleNodeClick = (location) => {
@@ -34,8 +65,6 @@ const App = () => {
     };
 
     const derivedPDUName = pduList.find(p => Number(p.id) === Number(selectedPDUId))?.name;
-
-    // App.js (ส่วนที่แก้ไขแล้ว)
 
     return (
         <>
@@ -62,7 +91,13 @@ const App = () => {
                     <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>☰</button>
 
                     <div className="breadcrumb">
-                        <span className="crumb" onClick={() => { setSelectedNode(null); setSelectedPDUId(null); }} style={{ cursor: 'pointer' }}>SYS</span>
+                        <span
+                            className="crumb"
+                            onClick={() => { setSelectedNode(null); setSelectedPDUId(null); }}
+                            style={{ cursor: 'pointer' }}
+                        >
+                            SYS
+                        </span>
 
                         {selectedNode && (
                             <>
@@ -86,11 +121,11 @@ const App = () => {
                     </div>
 
                     <div className="clock">
-                        {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        {now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                 </div>
 
-                {/* 4. Main Content Area (ส่วนที่เคยซ้อนกัน) */}
+                {/* 4. Main Content Area */}
                 <div className="content-scroll">
                     {/* เงื่อนไขที่ 1: หน้าแรกสุด (Dashboard) */}
                     {!selectedNode && !selectedPDUId && (
