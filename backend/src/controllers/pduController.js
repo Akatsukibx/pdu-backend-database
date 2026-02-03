@@ -68,18 +68,23 @@ exports.getDeviceDetail = async (req, res) => {
 exports.getDeviceHistory = async (req, res) => {
     const { id } = req.params;
     const { start, end } = req.query; // รับค่าช่วงเวลาจาก Frontend
-    
+
     // Default: 24 ชม. ล่าสุด
     const startDate = start || moment().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
     const endDate = end || moment().format('YYYY-MM-DD HH:mm:ss');
 
     try {
         const query = `
-            SELECT polled_at, voltage, current, power, temperature
-            FROM pdu_status_history
-            WHERE pdu_id = $1 AND polled_at >= $2 AND polled_at <= $3
-            ORDER BY polled_at ASC
-        `;
+    SELECT polled_at, voltage, current, power, temperature
+    FROM pdu_status_history
+    WHERE pdu_id = $1
+      AND polled_at >= $2
+      AND polled_at <= $3
+    ORDER BY polled_at ASC
+`;
+
+        await pool.query(query, [id, startDate, endDate]);
+
         const result = await pool.query(query, [id, startDate, endDate]);
         res.json(result.rows);
     } catch (err) {

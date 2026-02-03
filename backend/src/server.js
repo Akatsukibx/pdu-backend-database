@@ -3,7 +3,7 @@
 require("dotenv").config();
 
 const express = require("express");
-const { checkDB } = require("./lib/db"); // ✅ CommonJS require (ไม่มี .js)
+const { checkDB } = require("./lib/db"); 
 const { pduList } = require("./config/pdus");
 const pollAllPDUs = require("./src/poller/snmpPoller");
 

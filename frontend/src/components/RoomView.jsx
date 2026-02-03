@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { fetchPDUMonitor } from '../api/pduService';
+import PduHistoryChart from '../components/PduHistoryChart';
 
-const RoomView = ({ pduId,pduName, onBack }) => {
+const RoomView = ({ pduId, pduName, onBack }) => {
     const [pdu, setPdu] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const deviceId = 1;
 
     const loadData = async () => {
         try {
@@ -20,15 +22,15 @@ const RoomView = ({ pduId,pduName, onBack }) => {
     };
 
     useEffect(() => {
-    // ล้างข้อมูลเก่าออกก่อน เพื่อป้องกันชื่อเก่าค้างตอนกำลังโหลดเครื่องใหม่
-    setPdu(null); 
-    setLoading(true);
-    
-    loadData(); // ฟังก์ชันที่ไป fetch ข้อมูลจาก API
+        // ล้างข้อมูลเก่าออกก่อน เพื่อป้องกันชื่อเก่าค้างตอนกำลังโหลดเครื่องใหม่
+        setPdu(null);
+        setLoading(true);
 
-    const interval = setInterval(loadData, 5000); 
-    return () => clearInterval(interval);
-}, [pduId]); // <--- ต้องมี pduId ตรงนี้เพื่อให้มันโหลดข้อมูลใหม่เมื่อเปลี่ยนเครื่อง
+        loadData(); // ฟังก์ชันที่ไป fetch ข้อมูลจาก API
+
+        const interval = setInterval(loadData, 5000);
+        return () => clearInterval(interval);
+    }, [pduId]); // <--- ต้องมี pduId ตรงนี้เพื่อให้มันโหลดข้อมูลใหม่เมื่อเปลี่ยนเครื่อง
 
     if (loading && !pdu) return <div style={{ padding: '2rem' }}>Loading PDU Data...</div>;
     if (error) return <div style={{ padding: '2rem', color: 'red' }}>Error: {error}</div>;
@@ -67,6 +69,11 @@ const RoomView = ({ pduId,pduName, onBack }) => {
                 <div style={{ marginBottom: '3rem' }}>
                     <div style={{ marginBottom: '1rem', color: 'var(--accent-blue)', fontWeight: 'bold', fontSize: '1.1rem' }}>
                         DEVICE: {info.name} ({pdu.id})
+                    </div>
+
+                    <div>
+                        <h2>📈 PDU History</h2>
+                        <PduHistoryChart deviceId={deviceId} />
                     </div>
 
                     {/* 1. Active Alarms */}
