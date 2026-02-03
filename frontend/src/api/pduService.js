@@ -3,6 +3,80 @@ import axios from "axios";
 const API_BASE_URL = 'http://localhost:8000/api';
 const API = "http://localhost:8000/api";
 
+// ---------- helpers ----------
+const toNumOrNull = (v) => {
+  // รับทั้ง number และ string
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+const toNumOrZero = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const toUpper = (v) => String(v ?? "").trim().toUpperCase();
+
+// เปิด/ปิด debug log ได้ง่าย ๆ
+// ใช้: localStorage.setItem("PDU_DEBUG", "1") แล้ว refresh
+// ปิด: localStorage.removeItem("PDU_DEBUG")
+const isDebug = () => {
+  try {
+    return localStorage.getItem("PDU_DEBUG") === "1";
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * ✅ NEW: ดึง Summary จาก Backend (รวม power/current ให้แล้ว)
+ * ต้องมี route: GET /api/dashboard/summary
+ */
+export const fetchDashboardSummary = async () => {
+  const response = await fetch(`${API_BASE_URL}/dashboard/summary`);
+  if (!response.ok) throw new Error("Failed to fetch dashboard summary");
+  const data = await response.json();
+
+  if (isDebug()) console.log("[/dashboard/summary]", data);
+
+  return {
+    online: toNumOrZero(data.online),
+    offline: toNumOrZero(data.offline),
+    total_load_w: toNumOrZero(data.total_load_w),
+    total_current_a: toNumOrZero(data.total_current_a),
+  };
+};
+
+/**
+ * ใช้หา power จาก API โดย "ยึดค่าจาก DB" เป็นหลัก
+ * - ถ้าไม่มีค่าเลย -> null
+ */
+const pickPowerFromApi = (item) => {
+  // รองรับหลายชื่อ field เผื่อ view/alias ไม่ตรงกัน
+  const candidates = [
+    item.power,
+    item.watt,
+    item.power_w,
+    item.load_w,
+  ];
+
+  for (const v of candidates) {
+    const n = toNumOrNull(v);
+    if (n !== null) return n;
+  }
+  return null;
+};
+
+/**
+ * สถานะอุปกรณ์
+ * - รองรับทั้ง status และ connection_status จาก backend
+ */
+const normalizeStatus = (item) => {
+  const rawStatus = toUpper(item.connection_status ?? item.status);
+  return rawStatus === "ONLINE" ? "online" : "offline";
+};
+
 // 1. ดึงรายการทั้งหมด (ใช้หน้า Dashboard overview)
 export const fetchPDUList = async () => {
     const response = await fetch(`${API_BASE_URL}/dashboard`);
@@ -37,6 +111,7 @@ export const fetchPDUMonitor = async (pduId) => {
     return transformMonitorData(data);
 };
 
+// 3) แปลงข้อมูล Detail ให้พร้อมใช้กับ UI
 const transformMonitorData = (data) => {
     const { info, status, outlets } = data;
 
