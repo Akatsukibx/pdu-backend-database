@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchPDUMonitor } from '../api/pduService';
 
-const RoomView = ({ pduId, onBack }) => {
+const RoomView = ({ pduId,pduName, onBack }) => {
     const [pdu, setPdu] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -20,10 +20,15 @@ const RoomView = ({ pduId, onBack }) => {
     };
 
     useEffect(() => {
-        loadData();
-        const interval = setInterval(loadData, 5000); // Auto refresh every 5s
-        return () => clearInterval(interval);
-    }, [pduId]);
+    // ล้างข้อมูลเก่าออกก่อน เพื่อป้องกันชื่อเก่าค้างตอนกำลังโหลดเครื่องใหม่
+    setPdu(null); 
+    setLoading(true);
+    
+    loadData(); // ฟังก์ชันที่ไป fetch ข้อมูลจาก API
+
+    const interval = setInterval(loadData, 5000); 
+    return () => clearInterval(interval);
+}, [pduId]); // <--- ต้องมี pduId ตรงนี้เพื่อให้มันโหลดข้อมูลใหม่เมื่อเปลี่ยนเครื่อง
 
     if (loading && !pdu) return <div style={{ padding: '2rem' }}>Loading PDU Data...</div>;
     if (error) return <div style={{ padding: '2rem', color: 'red' }}>Error: {error}</div>;
@@ -55,7 +60,7 @@ const RoomView = ({ pduId, onBack }) => {
     return (
         <div>
             <h2 className="page-title">
-                Monitoring: {info.name}
+                Monitoring: {pduName || info.name}
             </h2>
 
             <div className="pdu-list">
@@ -151,7 +156,6 @@ const RoomView = ({ pduId, onBack }) => {
                                 <div style={styles.paramLabel}>Energy (kWh)</div>
                                 <div style={styles.paramValue}>{metrics.energy} kWh</div>
                             </div>
-                            // ใน RoomView.js ส่วนการแสดง Parameter
                             <div>
                                 <div style={styles.paramLabel}>Last Updated</div>
                                 <div style={styles.paramValue}>

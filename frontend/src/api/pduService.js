@@ -82,13 +82,15 @@ export const fetchPDUList = async () => {
     const response = await fetch(`${API_BASE_URL}/dashboard`);
     if (!response.ok) throw new Error('Failed to fetch PDU list');
     const data = await response.json();
-    
+
     // แปลงโครงสร้างให้เข้ากับ NodeView.js
     return data.map(item => ({
         id: item.id,
         name: item.name,
-        location: item.location || 'Server Room', // หากใน DB ยังไม่มี field location
-        status: item.connection_status === 'ONLINE' ? 'online' : 'offline',
+        location: item.location,
+        status: item.connection_status?.toUpperCase() === 'ONLINE'
+            ? 'online'
+            : 'offline',
         model: item.model,
         ip: item.ip_address,
         metrics: {
@@ -97,6 +99,7 @@ export const fetchPDUList = async () => {
             power: item.power
         }
     }));
+
 };
 
 // 2. ดึงรายละเอียดเครื่องรายตัว (ใช้หน้า RoomView.js)
@@ -104,48 +107,54 @@ export const fetchPDUMonitor = async (pduId) => {
     const response = await fetch(`${API_BASE_URL}/device/${pduId}`);
     if (!response.ok) throw new Error('Failed to fetch PDU monitor data');
     const data = await response.json();
-    
+
     return transformMonitorData(data);
 };
 
 const transformMonitorData = (data) => {
     const { info, status, outlets } = data;
 
-    // Formatting Helpers
-    const formatNum = (num, decimals = 2) => 
-        (num !== null && num !== undefined) ? Number(num).toFixed(decimals) : '0.00';
+    const formatNum = (num, decimals = 2) =>
+        (num !== null && num !== undefined)
+            ? Number(num).toFixed(decimals)
+            : '0.00';
 
     return {
         id: info.id,
         info: {
             name: info.name,
-            location: info.location || 'N/A',
+            location: info.location,
             model: info.model,
             ip: info.ip_address,
             deviceUrl: `http://${info.ip_address}`
         },
         status: {
-            isOffline: info.status !== 'ONLINE',
-            uptime: info.last_seen ? new Date(info.last_seen).toLocaleString() : '-', // ใช้ last_seen แทน uptime
-            hasAlarm: status?.alarm === 1 || status?.alarm === true,
-            alarmCount: status?.alarm ? 1 : 0
+            isOffline: status?.connection_status !== 'ONLINE',
+            lastSeen: status?.last_seen
+                ? new Date(status.last_seen).toLocaleString()
+                : '-',
+            hasAlarm: status?.alarm && status.alarm !== 'NORMAL',
+            alarmText: status?.alarm || 'NORMAL'
         },
         metrics: {
             current: formatNum(status?.current, 2),
             power: formatNum(status?.power, 1),
             voltage: formatNum(status?.voltage, 1),
-            energy: formatNum(status?.energy, 3), // ถ้ามีเก็บใน DB
+            temperature: formatNum(status?.temperature, 1),
             loadBar: {
-                percent: (status?.current / 20) * 100, // สมมติ Max ที่ 20A
-                color: status?.current > 16 ? 'var(--status-critical)' : 'var(--status-online)'
+                percent: status?.current
+                    ? Math.min((status.current / 20) * 100, 100)
+                    : 0,
+                color: status?.current > 16
+                    ? 'var(--status-critical)'
+                    : 'var(--status-online)'
             }
         },
-        // แปลง Outlet จาก DB (ON/OFF) ให้ UI เข้าใจ
         outlets: outlets.map(o => ({
             id: o.outlet_no,
             name: o.name,
             isOn: o.status === 'ON',
-            formattedCurrent: 'N/A' // ตัวอย่างนี้ DB เก็บแค่สถานะ ON/OFF
+            formattedCurrent: 'N/A'
         }))
     };
 };

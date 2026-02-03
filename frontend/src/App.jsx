@@ -35,40 +35,37 @@ const App = () => {
 
     const derivedPDUName = pduList.find(p => Number(p.id) === Number(selectedPDUId))?.name;
 
+    // App.js (ส่วนที่แก้ไขแล้ว)
+
     return (
         <>
-            {/* Overlay for mobile when menu is open */}
+            {/* 1. Mobile Overlay */}
             {mobileMenuOpen && (
                 <div
-                    style={{
-                        position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 900
-                    }}
+                    style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 900 }}
                     onClick={() => setMobileMenuOpen(false)}
                 />
             )}
 
+            {/* 2. Sidebar */}
             <Sidebar
                 activeNode={selectedNode}
                 onSelectNode={handleNodeClick}
                 pduList={pduList}
                 loaded={loaded}
-                isOpen={mobileMenuOpen} // Pass open state to sidebar
+                isOpen={mobileMenuOpen}
             />
 
             <main className="main-content">
+                {/* 3. Top Bar (Breadcrumb & Clock) */}
                 <div className="top-bar">
-                    <button
-                        className="mobile-menu-btn"
-                        onClick={() => setMobileMenuOpen(true)}
-                    >
-                        ☰
-                    </button>
+                    <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>☰</button>
 
                     <div className="breadcrumb">
-                        <span className="crumb">SYS</span>
+                        <span className="crumb" onClick={() => { setSelectedNode(null); setSelectedPDUId(null); }} style={{ cursor: 'pointer' }}>SYS</span>
 
                         {selectedNode && (
-                            <React.Fragment>
+                            <>
                                 <span className="crumb-sep">/</span>
                                 <span
                                     className={`crumb ${!selectedPDUId ? 'active' : ''}`}
@@ -77,28 +74,30 @@ const App = () => {
                                 >
                                     {selectedNode.toUpperCase()}
                                 </span>
-                            </React.Fragment>
+                            </>
                         )}
 
                         {selectedPDUId && (
-                            <React.Fragment>
+                            <>
                                 <span className="crumb-sep">/</span>
                                 <span className="crumb active">{derivedPDUName}</span>
-                            </React.Fragment>
+                            </>
                         )}
                     </div>
+
                     <div className="clock">
                         {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                 </div>
 
+                {/* 4. Main Content Area (ส่วนที่เคยซ้อนกัน) */}
                 <div className="content-scroll">
-                    {/* แสดง Dashboard เมื่อไม่ได้เลือก Zone และไม่ได้เลือก PDU รายตัว */}
+                    {/* เงื่อนไขที่ 1: หน้าแรกสุด (Dashboard) */}
                     {!selectedNode && !selectedPDUId && (
                         <DashboardView pduList={pduList} />
                     )}
 
-                    {/* แสดงรายชื่อ PDU ในโซนที่เลือก */}
+                    {/* เงื่อนไขที่ 2: เลือกโซนแล้ว แต่ยังไม่ได้เลือกเครื่อง (Node View) */}
                     {selectedNode && !selectedPDUId && (
                         <NodeView
                             location={selectedNode}
@@ -107,10 +106,11 @@ const App = () => {
                         />
                     )}
 
-                    {/* แสดงหน้า Monitoring รายเครื่อง */}
+                    {/* เงื่อนไขที่ 3: เลือกเครื่องแล้ว (Room View) */}
                     {selectedPDUId && (
                         <RoomView
                             pduId={selectedPDUId}
+                            pduName={derivedPDUName}
                             onBack={() => setSelectedPDUId(null)}
                         />
                     )}
