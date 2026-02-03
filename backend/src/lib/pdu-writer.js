@@ -34,18 +34,29 @@ function getMaxPortFromOutletsDetail(outletsDetail, fallback = 8) {
   return max;
 }
 
-// หา/สร้าง device แล้วคืน id
-async function ensureDevice({ name, ip, model, community }) {
+async function ensureDevice({ name, ip, model, community, status }) {
+  const st = String(status || "OFFLINE").toUpperCase();
+
   const q = `
     INSERT INTO pdu_devices (name, ip_address, model, snmp_community, status, last_seen)
-    VALUES ($1, $2::inet, $3, $4, 'ONLINE', NOW())
+    VALUES (
+      $1,
+      $2::inet,
+      $3,
+      $4,
+      $5::varchar,
+      CASE WHEN $5::varchar = 'ONLINE' THEN NOW() ELSE NULL::timestamp END
+    )
     ON CONFLICT (ip_address)
     DO UPDATE SET
       name = COALESCE(EXCLUDED.name, pdu_devices.name),
       model = COALESCE(EXCLUDED.model, pdu_devices.model),
       snmp_community = COALESCE(EXCLUDED.snmp_community, pdu_devices.snmp_community),
-      status = 'ONLINE',
-      last_seen = NOW()
+      status = EXCLUDED.status,
+      last_seen = CASE
+        WHEN EXCLUDED.status = 'ONLINE' THEN NOW()
+        ELSE pdu_devices.last_seen
+      END
     RETURNING id
   `;
 
@@ -54,6 +65,7 @@ async function ensureDevice({ name, ip, model, community }) {
     ip,
     model || null,
     community || null,
+    st,
   ]);
 
   return rows[0].id;
@@ -103,7 +115,7 @@ async function upsertPduCurrentAndHistory(pduId, data) {
     ]
   );
 
-  // update last_seen
+  // update last_seen + status ONLINE
   await pool.query(
     `UPDATE pdu_devices SET last_seen = $2, status = 'ONLINE' WHERE id = $1`,
     [pduId, polledAt]
@@ -114,7 +126,7 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
   // outletsDetail ตัวอย่าง: { Port1:"ON", Port2:"OFF", ... }
   const polledAt = new Date();
 
-  // ✅ เดิม fix 8 -> เปลี่ยนเป็น dynamic (เช่น BAWORN จะได้ 12)
+  // ✅ dynamic outlet count (เช่น BAWORN จะได้ 12)
   const outletCount = getMaxPortFromOutletsDetail(outletsDetail, 8);
 
   for (let i = 1; i <= outletCount; i++) {
@@ -159,6 +171,14 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
   }
 }
 
+/**
+ * ✅ savePollResult behavior:
+ * - ONLINE  : upsert device + upsert current/history + outlets
+ * - OFFLINE : upsert device(status OFFLINE) ONLY แล้ว return
+ *
+ * ✅ OFFLINE จะไม่ไปทับค่าใน pdu_status_current/outlet_current เดิม
+ * เพื่อให้ค่า last known ยังอยู่ (หรือจะให้ view ตัดโชว์เองก็ได้)
+ */
 async function savePollResult(pduConfig, result) {
   // ✅ ip fallback หลายแบบ
   const ip =
@@ -176,13 +196,24 @@ async function savePollResult(pduConfig, result) {
   // ✅ model: เอาจาก result ก่อน ถ้าไม่มีเอาจาก config
   const model = result.model || pduConfig.model || null;
 
+  // ✅ สำคัญ: status ต้องมาจาก poller
+  const status = String(result.status || "OFFLINE").toUpperCase();
+
+  // ✅ 1) OFFLINE ก็ insert/update device ได้
   const pduId = await ensureDevice({
     name: result.name || pduConfig.name,
     ip,
     model,
     community: pduConfig.community || null,
+    status,
   });
 
+  // ✅ 2) OFFLINE: จบตรงนี้ ไม่เขียนตารางอื่น
+  if (status !== "ONLINE") {
+    return;
+  }
+
+  // ✅ 3) ONLINE: เขียน metrics + outlets ตามเดิม
   await upsertPduCurrentAndHistory(pduId, {
     voltage: numOrNull(result.voltage),
     current: numOrNull(result.current),
