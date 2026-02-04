@@ -1,57 +1,72 @@
-// //server.js (config)
-// require("dotenv").config();
-
-// const { pduList } = require("./config/pdus");
-// const pollAllPDUs = require("./src/poller/snmpPoller");
-
-// const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 30000);
-
-// console.log("🚀 Backend running");
-// console.log(`📟 PDU count = ${pduList.length}`);
-// console.log(`⏱  Poll interval = ${POLL_INTERVAL} ms`);
-
-// async function run() {
-//   try {
-//     await pollAllPDUs(pduList);
-//   } catch (err) {
-//     console.error("❌ poll error:", err?.message || err);
-//   }
-// }
-
-// run();
-// setInterval(run, POLL_INTERVAL);
-
-
-
-// server.js
+// backend/server.js
 require("dotenv").config();
+
 const express = require("express");
-const cors = require("cors"); // แนะนำให้เพิ่ม เพื่อให้ Frontend เรียกได้
-const { checkDB } = require("./src/lib/db"); 
+const cors = require("cors");
+
+const { checkDB, pool } = require("./src/lib/db"); // ✅ ต้องมี pool เพื่อ cleanup
 const { pduList } = require("./config/pdus");
 const pollAllPDUs = require("./src/poller/snmpPoller");
 
-// ✅ Import Routes ที่เราสร้างตะกี้
+// 🔐 AUTH
+const authRoutes = require("./src/routes/authRoutes");
+const { requireAuth } = require("./src/middleware/auth");
+
+// 📊 PDU
 const pduRoutes = require("./src/routes/pduRoutes");
 
 const app = express();
 
-// Middleware
-app.use(cors()); 
+app.use(cors());
 app.use(express.json());
-
-// ✅ เรียกใช้ API Routes
-// เวลาเรียกจะเป็น: http://localhost:8000/api/dashboard
-app.use("/api", pduRoutes);
 
 const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 300000);
 
-// Health Check
-app.get("/health", async (req, res) => {
+// ✅ session cleanup config
+const SESSION_CLEANUP_INTERVAL_MS = Number(process.env.SESSION_CLEANUP_INTERVAL_MS || 60000); // 1 นาที
+const SESSION_IDLE_MINUTES = Number(process.env.SESSION_IDLE_MINUTES || 2); // แนะนำ 2 นาที (ปรับได้)
+
+// -------------------------
+// PUBLIC ROUTES
+// -------------------------
+app.get("/health", (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// ✅ งาน Poller (คงเดิมไว้)
+// 🔐 LOGIN (ไม่ต้อง auth)
+app.use("/api/auth", authRoutes);
+
+// -------------------------
+// PROTECTED ROUTES
+// -------------------------
+app.use("/api", requireAuth, pduRoutes);
+
+// -------------------------
+// SESSION CLEANUP JOB
+// -------------------------
+async function cleanupIdleSessions() {
+  try {
+    const { rowCount } = await pool.query(
+      `
+      DELETE FROM public.app_sessions
+      WHERE revoked = TRUE
+         OR expires_at <= NOW()
+         OR last_seen <= NOW() - ($1::int * INTERVAL '1 minute')
+      `,
+      [SESSION_IDLE_MINUTES]
+    );
+
+    if (rowCount > 0) {
+      console.log(`🧹 Session cleanup: deleted ${rowCount} rows (idle>${SESSION_IDLE_MINUTES}m)`);
+    }
+  } catch (e) {
+    console.error("❌ cleanupIdleSessions error:", e?.message || e);
+  }
+}
+
+// -------------------------
+// POLLER
+// -------------------------
 async function runTask() {
   console.log(`🕒 Cron: Polling ${pduList.length} PDUs...`);
   try {
@@ -62,24 +77,28 @@ async function runTask() {
 }
 
 async function main() {
-  // 1) connect DB
   await checkDB();
 
-  // 2) start API server
   const PORT = Number(process.env.PORT || 8000);
   app.listen(PORT, () => {
     console.log(`🚀 API server running on port ${PORT}`);
+    console.log(`🔐 Auth login: POST http://localhost:${PORT}/api/auth/login`);
+    console.log(`📊 Dashboard: GET http://localhost:${PORT}/api/dashboard (protected)`);
     console.log(`📟 PDU count = ${pduList.length}`);
     console.log(`⏱  Poll interval = ${POLL_INTERVAL} ms`);
-    console.log(`🔗 API Endpoint: http://localhost:${PORT}/api/dashboard`);
+    console.log(`🧹 Session cleanup every ${SESSION_CLEANUP_INTERVAL_MS} ms (idle>${SESSION_IDLE_MINUTES}m)`);
   });
 
-  // 3) start poller loop
+  // ✅ start session cleanup loop
+  await cleanupIdleSessions(); // run once on boot
+  setInterval(cleanupIdleSessions, SESSION_CLEANUP_INTERVAL_MS);
+
+  // poller loop
   await runTask();
   setInterval(runTask, POLL_INTERVAL);
 }
 
 main().catch((e) => {
-  console.error("❌ fatal:", e?.message || e);
+  console.error("❌ fatal:", e);
   process.exit(1);
 });

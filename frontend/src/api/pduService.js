@@ -1,9 +1,81 @@
-// pduService.js
+// frontend/src/api/pduService.js
 import axios from "axios";
 
-const API_BASE_URL = "http://localhost:8000/api";
+// ✅ รองรับ .env (VITE_API_BASE=http://localhost:8000)
+const API_BASE_URL =
+  (import.meta.env?.VITE_API_BASE || "http://localhost:8000") + "/api";
 
+// ===============================
+// ✅ Auth helpers
+// ===============================
+const getToken = () => {
+  try {
+    return localStorage.getItem("pdu_token") || "";
+  } catch {
+    return "";
+  }
+};
+
+const authHeaders = () => {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+// ✅ อ่าน error จาก response ให้ละเอียด (json/text)
+const readErrorText = async (response) => {
+  try {
+    const ct = response.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const j = await response.json();
+      return j?.error || j?.message || "";
+    }
+    return await response.text();
+  } catch {
+    return "";
+  }
+};
+
+// ✅ fetch wrapper ที่แนบ token + โยน error พร้อม status (ให้ App.jsx จับ 401 ได้ชัวร์)
+const fetchWithAuth = async (url, options = {}) => {
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...authHeaders(),
+    },
+  });
+
+  if (!res.ok) {
+    const msg = await readErrorText(res);
+
+    const err = new Error(msg || res.statusText || `HTTP ${res.status}`);
+    err.status = res.status;          // ✅ สำคัญ: App.jsx จะเช็ค error.status === 401
+    err.responseText = msg || "";     // ✅ เผื่อ debug
+    throw err;
+  }
+
+  // ✅ ป้องกันกรณี 204/ไม่มี body
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) return null;
+
+  return res.json();
+};
+
+// ✅ axios แนบ token ทุกครั้ง (สำหรับ history chart)
+let interceptorAdded = false;
+if (!interceptorAdded) {
+  interceptorAdded = true;
+
+  axios.interceptors.request.use((config) => {
+    const token = getToken();
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  });
+}
+
+// ===============================
 // ---------- helpers ----------
+// ===============================
 const toNumOrNull = (v) => {
   if (v === null || v === undefined) return null;
   const n = Number(v);
@@ -33,17 +105,15 @@ const isDebug = () => {
  * ===============================
  */
 export const fetchDashboardSummary = async () => {
-  const response = await fetch(`${API_BASE_URL}/dashboard/summary`);
-  if (!response.ok) throw new Error("Failed to fetch dashboard summary");
-  const data = await response.json();
+  const data = await fetchWithAuth(`${API_BASE_URL}/dashboard/summary`);
 
   if (isDebug()) console.log("[/dashboard/summary]", data);
 
   return {
-    online: toNumOrZero(data.online),
-    offline: toNumOrZero(data.offline),
-    total_load_w: toNumOrZero(data.total_load_w),
-    total_current_a: toNumOrZero(data.total_current_a),
+    online: toNumOrZero(data?.online),
+    offline: toNumOrZero(data?.offline),
+    total_load_w: toNumOrZero(data?.total_load_w),
+    total_current_a: toNumOrZero(data?.total_current_a),
   };
 };
 
@@ -54,12 +124,7 @@ export const fetchDashboardSummary = async () => {
  * ===============================
  */
 const pickPowerFromApi = (item) => {
-  const candidates = [
-    item.power,
-    item.watt,
-    item.power_w,
-    item.load_w,
-  ];
+  const candidates = [item?.power, item?.watt, item?.power_w, item?.load_w];
   for (const v of candidates) {
     const n = toNumOrNull(v);
     if (n !== null) return n;
@@ -68,14 +133,12 @@ const pickPowerFromApi = (item) => {
 };
 
 const normalizeStatus = (item) => {
-  const raw = toUpper(item.connection_status ?? item.status);
+  const raw = toUpper(item?.connection_status ?? item?.status);
   return raw === "ONLINE" ? "online" : "offline";
 };
 
 export const fetchPDUList = async () => {
-  const response = await fetch(`${API_BASE_URL}/dashboard`);
-  if (!response.ok) throw new Error("Failed to fetch PDU list");
-  const data = await response.json();
+  const data = await fetchWithAuth(`${API_BASE_URL}/dashboard`);
 
   return (data || []).map((item) => {
     const power = pickPowerFromApi(item);
@@ -103,9 +166,7 @@ export const fetchPDUList = async () => {
  * ===============================
  */
 export const fetchPDUMonitor = async (pduId) => {
-  const response = await fetch(`${API_BASE_URL}/device/${pduId}`);
-  if (!response.ok) throw new Error("Failed to fetch PDU monitor data");
-  const data = await response.json();
+  const data = await fetchWithAuth(`${API_BASE_URL}/device/${pduId}`);
   return transformMonitorData(data);
 };
 
@@ -131,9 +192,7 @@ const transformMonitorData = (data) => {
     status: {
       isOffline: statusUpper !== "ONLINE",
       uptime: status?.uptime || "-",
-      lastSeen: status?.last_seen
-        ? new Date(status.last_seen).toLocaleString()
-        : "-",
+      lastSeen: status?.last_seen ? new Date(status.last_seen).toLocaleString() : "-",
       hasAlarm: !!(status?.alarm && status.alarm !== "NORMAL"),
       alarmText: status?.alarm || "NORMAL",
     },
@@ -144,22 +203,16 @@ const transformMonitorData = (data) => {
       temperature: formatNum(status?.temperature, 1),
       energy: formatNum(status?.energy, 2),
       loadBar: {
-        percent: status?.current
-          ? Math.min((Number(status.current) / 20) * 100, 100)
-          : 0,
+        percent: status?.current ? Math.min((Number(status.current) / 20) * 100, 100) : 0,
         color:
-          Number(status?.current) > 16
-            ? "var(--status-critical)"
-            : "var(--status-online)",
+          Number(status?.current) > 16 ? "var(--status-critical)" : "var(--status-online)",
       },
     },
     outlets: (outlets || []).map((o) => ({
       id: o.outlet_no,
       name: o.name,
       isOn: toUpper(o.status) === "ON",
-      formattedCurrent: o.current
-        ? Number(o.current).toFixed(2)
-        : "N/A",
+      formattedCurrent: o.current ? Number(o.current).toFixed(2) : "N/A",
     })),
   };
 };
