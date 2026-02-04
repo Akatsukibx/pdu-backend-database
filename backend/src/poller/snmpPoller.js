@@ -85,15 +85,14 @@ function outletToSymbol(v, brandUpper = "", modelUpper = "") {
     return "-";
   }
 
-  // ✅ CyberPower RMCARD205 (BAWORN): 1=ON, 2=OFF (พิสูจน์ด้วย diff แล้ว)
+  // ✅ CyberPower RMCARD205 (BAWORN): 1=ON, 2=OFF
   if (b === "CYBERPOWER" && m === "RMCARD205") {
     if (n === 1) return "●";
     if (n === 2) return "○";
-    // ✅ ค่าอื่นถือว่า OFF ให้เหมือน "ปิด"
     return "○";
   }
 
-  // ✅ CyberPower รุ่นอื่น (เช่น PDU41005): มักเป็น 3=ON, 0=OFF (+ เผื่อ 1/2)
+  // ✅ CyberPower รุ่นอื่น: 3=ON, 0=OFF (+ เผื่อ 1/2)
   if (b === "CYBERPOWER") {
     if (n === 3) return "●";
     if (n === 0) return "○";
@@ -225,7 +224,7 @@ async function pollOne(pdu) {
   const brand = String(pdu.brand || "").toUpperCase();
   const model = String(pdu.model || "").toUpperCase();
 
-  // ✅ (B) เลือกตาม MODEL ก่อน
+  // ✅ เลือกตาม MODEL ก่อน
   if (model === "RMCARD205") return pollBaworn(pdu);
 
   // ✅ fallback ตาม BRAND
@@ -282,11 +281,12 @@ async function pollAllPDUs(pduList) {
     );
   }
 
-  // ✅ บันทึกลง DB เฉพาะ ONLINE (ยิงครั้งเดียว)
+  // ✅ NEW: บันทึกลง DB ทั้ง ONLINE และ OFFLINE
+  // - OFFLINE: จะบันทึก "device + status OFFLINE" เท่านั้น (ตาม logic ใน writer)
+  // - ONLINE: จะบันทึกเต็มเหมือนเดิม
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const cfg = pduList[i];
-    if (String(r.status).toUpperCase() !== "ONLINE") continue;
 
     try {
       const merged = { ...cfg, ...r };
@@ -294,10 +294,15 @@ async function pollAllPDUs(pduList) {
 
       const payload = {
         ...r,
+        // ✅ สำคัญ: ส่ง status ไปด้วย
+        status: String(r.status || "OFFLINE").toUpperCase(),
+
         ip: r.ip || cfg.ip_address || cfg.ip || cfg.host,
         name: r.name || cfg.name,
         brand: r.brand || cfg.brand,
         model: r.model || cfg.model,
+
+        // ✅ outlets_detail จะทำไว้เสมอ แต่ writer จะใช้เฉพาะตอน ONLINE
         outlets_detail: outletsArrayToDetail(
           r.outlets,
           r.brand || cfg.brand,
@@ -306,9 +311,9 @@ async function pollAllPDUs(pduList) {
         ),
       };
 
-      console.log("💾 saving to DB:", payload.name, payload.ip);
+      console.log("💾 saving to DB:", payload.name, payload.ip, payload.status);
       await savePollResult(cfg, payload);
-      console.log("✅ saved:", payload.name);
+      console.log("✅ saved:", payload.name, payload.status);
     } catch (e) {
       console.error("❌ DB save error:", cfg?.name || r?.name, e?.message || e);
     }

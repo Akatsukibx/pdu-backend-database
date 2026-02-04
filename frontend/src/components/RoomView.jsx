@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+// RoomView.jsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchPDUMonitor } from '../api/pduService';
 import PduHistoryChart from '../components/PduHistoryChart';
+
+
+const DETAIL_REFRESH_MS = 300000; // ✅ ดึงข้อมูลใหม่ทุก 5 นาที (ปรับได้)
 
 const RoomView = ({ pduId, pduName, onBack }) => {
     const [pdu, setPdu] = useState(null);
@@ -8,29 +12,69 @@ const RoomView = ({ pduId, pduName, onBack }) => {
     const [error, setError] = useState(null);
     const deviceId = pduId;
 
-    const loadData = async () => {
+    // ✅ กันยิงซ้อน
+    const isFetchingRef = useRef(false);
+
+    // ✅ กัน stale response ตอนเปลี่ยน pduId (request เก่ามาทีหลัง)
+    const requestSeqRef = useRef(0);
+
+    const loadData = useCallback(async (isFirstLoad = false) => {
+        if (!pduId) return;
+
+        // กันยิงซ้อน
+        if (isFetchingRef.current) return;
+
+        // กันยิงตอน tab ไม่ได้ active (ลดภาระ backend)
+        if (!isFirstLoad && document.hidden) return;
+
+        isFetchingRef.current = true;
+        const mySeq = ++requestSeqRef.current;
+
         try {
-            // setLoading(true); // Don't block UI on refresh
+            // setLoading(true); // ✅ ตามที่คุณตั้งใจ: ไม่ block UI ตอน refresh รอบถัดไป
             const data = await fetchPDUMonitor(pduId);
+
+            // ถ้ามี request ใหม่กว่ามาแล้ว ให้ทิ้งผลของ request เก่า
+            if (mySeq !== requestSeqRef.current) return;
+
             setPdu(data);
             setError(null);
         } catch (err) {
-            setError(err.message);
+            // ถ้ามี request ใหม่กว่ามาแล้ว ให้ทิ้ง error ของ request เก่า
+            if (mySeq !== requestSeqRef.current) return;
+
+            setError(err?.message || String(err));
         } finally {
+            // ถ้ามี request ใหม่กว่ามาแล้ว ให้ทิ้ง final ของ request เก่า
+            if (mySeq !== requestSeqRef.current) return;
+
+            isFetchingRef.current = false;
             setLoading(false);
         }
-    };
+    }, [pduId]);
 
     useEffect(() => {
         // ล้างข้อมูลเก่าออกก่อน เพื่อป้องกันชื่อเก่าค้างตอนกำลังโหลดเครื่องใหม่
         setPdu(null);
+
+        setError(null);
         setLoading(true);
 
-        loadData(); // ฟังก์ชันที่ไป fetch ข้อมูลจาก API
+        // โหลดครั้งแรกทันที
+        loadData(true);
 
-        const interval = setInterval(loadData, 5000);
-        return () => clearInterval(interval);
-    }, [pduId]); // <--- ต้องมี pduId ตรงนี้เพื่อให้มันโหลดข้อมูลใหม่เมื่อเปลี่ยนเครื่อง
+        // ตั้ง interval โหลดซ้ำ
+        const interval = setInterval(() => {
+            loadData(false);
+        }, DETAIL_REFRESH_MS);
+
+        return () => {
+            clearInterval(interval);
+            // ทำให้ request เก่าถูกมองว่า stale ทันทีหลัง unmount/เปลี่ยน pduId
+            requestSeqRef.current++;
+            isFetchingRef.current = false;
+        };
+    }, [pduId, loadData]);
 
     if (loading && !pdu) return <div style={{ padding: '2rem' }}>Loading PDU Data...</div>;
     if (error) return <div style={{ padding: '2rem', color: 'red' }}>Error: {error}</div>;

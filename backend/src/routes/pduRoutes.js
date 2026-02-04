@@ -1,9 +1,10 @@
 
 
 // src/routes/pduRoutes.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const pduController = require('../controllers/pduController');
+const pduController = require("../controllers/pduController");
+
 
 // กำหนด URL และผูกกับ Controller function
 router.get('/dashboard', pduController.getDashboardOverview);

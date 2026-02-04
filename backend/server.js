@@ -44,7 +44,7 @@ app.use(express.json());
 // เวลาเรียกจะเป็น: http://localhost:8000/api/dashboard
 app.use("/api", pduRoutes);
 
-const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 30000);
+const POLL_INTERVAL = Number(process.env.POLL_INTERVAL || 300000);
 
 // Health Check
 app.get("/health", async (req, res) => {
