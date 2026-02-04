@@ -231,7 +231,7 @@ const RoomView = ({ pduId, pduName, onBack }) => {
                                         margin: '0 auto'
                                     }}></div>
                                     <span style={{ fontSize: '1.1rem', fontWeight: 600 }}>{outlet.id}</span>
-                                    <div style={{ fontSize: '0.7rem', color: '#999' }}>{outlet.formattedCurrent}A</div>
+                                    {/* <div style={{ fontSize: '0.7rem', color: '#999' }}>{outlet.formattedCurrent}A</div> */}
                                 </div>
                             ))}
                             {(!outlets || outlets.length === 0) && <div style={{ color: '#666' }}>No outlets data</div>}
