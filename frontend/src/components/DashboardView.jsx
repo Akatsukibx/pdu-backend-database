@@ -1,5 +1,5 @@
 // components/DashboardView.js
-const DashboardView = ({ pduList }) => {
+    const DashboardView = ({ pduList, onSelectDevice }) => {
     const total = pduList.length;
     const online = pduList.filter(p => p.status === 'online').length;
     const offline = total - online;
@@ -46,7 +46,17 @@ const DashboardView = ({ pduList }) => {
                 </thead>
                 <tbody>
                     {pduList.map(p => (
-                        <tr key={p.id} style={{borderBottom: '1px solid var(--border-main)'}}>
+                        <tr
+                        key={p.id}
+                        onClick={() => onSelectDevice?.(p)}
+                         style={{
+                         borderBottom: '1px solid var(--border-main)',
+                         cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                        title="Click to view device detail"
+                    >
                             <td style={{padding: '12px'}}>{p.name}</td>
                             <td style={{padding: '12px', fontFamily: 'monospace'}}>{p.ip}</td>
                             <td style={{padding: '12px'}}>
