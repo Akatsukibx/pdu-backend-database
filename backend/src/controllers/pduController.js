@@ -67,25 +67,25 @@ exports.getDeviceDetail = async (req, res) => {
 // 3. ดึงกราฟย้อนหลัง (History)
 exports.getDeviceHistory = async (req, res) => {
     const { id } = req.params;
-    const { start, end } = req.query; // รับค่าช่วงเวลาจาก Frontend
+    const { start, end } = req.query;
 
-    // Default: 24 ชม. ล่าสุด
     const startDate = start || moment().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
     const endDate = end || moment().format('YYYY-MM-DD HH:mm:ss');
 
     try {
-        const query = `
-    SELECT polled_at, voltage, current, power, temperature
-    FROM pdu_status_history
-    WHERE pdu_id = $1
-      AND polled_at >= $2
-      AND polled_at <= $3
-    ORDER BY polled_at ASC
-`;
+        console.log("📊 HISTORY REQUEST PDU:", id);
 
-        await pool.query(query, [id, startDate, endDate]);
+        const query = `
+            SELECT polled_at, voltage, current, power, temperature
+            FROM pdu_status_history
+            WHERE pdu_id = $1
+              AND polled_at BETWEEN $2 AND $3
+            ORDER BY polled_at ASC
+        `;
 
         const result = await pool.query(query, [id, startDate, endDate]);
+
+        console.log("📈 ROWS:", result.rows.length);
         res.json(result.rows);
     } catch (err) {
         console.error(err);

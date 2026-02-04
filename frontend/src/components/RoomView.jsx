@@ -6,7 +6,7 @@ const RoomView = ({ pduId, pduName, onBack }) => {
     const [pdu, setPdu] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const deviceId = 1;
+    const deviceId = pduId;
 
     const loadData = async () => {
         try {
