@@ -216,9 +216,9 @@ const RoomView = ({ pduId, pduName, onBack }) => {
               <div style={{ position: 'absolute', right: '20%', height: '100%', width: '2px', background: 'rgba(255,255,255,0.2)' }}></div>
               <div style={{ position: 'absolute', right: '10%', height: '100%', width: '2px', background: 'rgba(255,255,255,0.2)' }}></div>
             </div>
-            <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+            {/* <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
               <button className="btn-small">More &gt;</button>
-            </div>
+            </div> */}
           </div>
 
           {/* 3. Parameters Grid */}
