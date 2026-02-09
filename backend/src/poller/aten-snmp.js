@@ -1,6 +1,6 @@
-// src/poller/aten-snmp.js
+// src/poller/aten-snmp.js (CommonJS)
 const snmp = require("net-snmp");
-const oids = require("../../config/oids"); // ต้องมี oids.atenMainRoot หรือกำหนดด้านล่าง
+const oids = require("../../config/oids");
 
 function normalizeOid(x) {
   return String(x || "").trim().replace(/^\./, "").replace(/\s+/g, "");
@@ -27,72 +27,89 @@ function toNum(v) {
   return Number.isFinite(n) ? n : NaN;
 }
 
-function parseAtenOutletState(n) {
-  // ATEN ที่คุณเจอ: 1 = OFF, 2 = ON
+// ✅ ATEN (จากค่าที่คุณ walk เจอจริง):
+// 2 = ON, 1 = OFF
+// 6 มักเจอใน index ที่ "ไม่มีจริง/NA" (เช่น 9..32 ใน PE6208AV)
+function parseAtenOutletState(v) {
+  const n = Number(v);
   if (n === 2) return "ON";
   if (n === 1) return "OFF";
-  // เผื่อบางรุ่น
+  if (n === 6) return "N/A";
   if (n === 0) return "OFF";
   return "N/A";
 }
 
-// ดึง subtree แล้วคืน map { oidString: valueString }
-function snmpSubtree(session, rootOid) {
-  const root = normalizeOid(rootOid);
+function snmpGet(session, oidList) {
+  const list = oidList.map(normalizeOid).filter(Boolean);
+
   return new Promise((resolve, reject) => {
-    const raw = {};
-    session.subtree(
-      root,
-      (varbinds) => {
-        for (const vb of varbinds) {
-          if (!snmp.isVarbindError(vb)) {
-            raw[normalizeOid(vb.oid)] = Buffer.isBuffer(vb.value) ? vb.value.toString() : vb.value;
-          }
-        }
-      },
-      (err) => {
-        if (err) return reject(err);
-        resolve(raw);
+    session.get(list, (err, varbinds) => {
+      if (err) return reject(err);
+
+      const out = {};
+      for (const vb of varbinds) {
+        if (snmp.isVarbindError(vb)) out[normalizeOid(vb.oid)] = null;
+        else out[normalizeOid(vb.oid)] = vb.value;
       }
-    );
+      resolve(out);
+    });
   });
 }
 
+// ✅ ยิงเป็น batch กัน packet ใหญ่
+async function snmpGetBatched(session, oidList, batchSize = 6) {
+  const list = oidList.map(normalizeOid).filter(Boolean);
+  const out = {};
+  for (let i = 0; i < list.length; i += batchSize) {
+    const chunk = list.slice(i, i + batchSize);
+    const part = await snmpGet(session, chunk);
+    Object.assign(out, part);
+  }
+  return out;
+}
+
 async function pollAten(pdu) {
-  const session = createV2cSession(pdu.ip, pdu.community || "public");
+  const ip = pdu.ip || pdu.ip_address || pdu.host;
+  const community = pdu.community || pdu.snmp_community || "public";
+  const session = createV2cSession(ip, community);
 
   try {
-    // ✅ ใช้ root เดียว แล้วแตก suffix เอา
-    // แนะนำให้ใส่ใน ../../config/oids.js เป็น:
-    // module.exports = { atenMainRoot: "1.3.6.1.4.1.21317.1.3.2.2.2.1", ... }
     const base = normalizeOid(
-      (oids && (oids.atenMainRoot || (oids.aten && oids.aten.root))) ||
+      (oids && ((oids.aten && oids.aten.root) || oids.atenMainRoot)) ||
         "1.3.6.1.4.1.21317.1.3.2.2.2.1"
     );
 
-    const raw = await snmpSubtree(session, base);
+    // metrics OIDs
+    const oidCurrent = normalizeOid(`${base}.3.1.2.1`);
+    const oidVoltage = normalizeOid(`${base}.3.1.3.1`);
+    const oidPower = normalizeOid(`${base}.3.1.4.1`);
+    const oidEnergy = normalizeOid(`${base}.3.1.5.1`);
 
-    // OID ที่คุณ diff เห็นชัดว่าใช้ชุดนี้ได้จริง
-    const oidCurrent = normalizeOid(`${base}.3.1.2.1`); // STRING "0.85"
-    const oidVoltage = normalizeOid(`${base}.3.1.3.1`); // STRING "228.84"
-    const oidPower   = normalizeOid(`${base}.3.1.4.1`); // STRING "105.5760"
-    const oidEnergy  = normalizeOid(`${base}.3.1.5.1`); // STRING "217.7482"
+    const map = (oids && oids.aten && oids.aten.map) ? oids.aten.map : {};
+
+    // outlet status base
+    const outletStatusBase = normalizeOid(
+      map.outletStatusBase || `${base}.5.1.2`
+    );
+
+    // ✅ PE6208AV มี 8 outlet
+    const outletOids = [];
+    for (let i = 1; i <= 8; i++) outletOids.push(`${outletStatusBase}.${i}`);
+
+    const want = [oidCurrent, oidVoltage, oidPower, oidEnergy, ...outletOids];
+    const raw = await snmpGetBatched(session, want, 6);
 
     const current = toNum(raw[oidCurrent]);
     const voltage = toNum(raw[oidVoltage]);
-    const power   = toNum(raw[oidPower]);
-    const energy  = toNum(raw[oidEnergy]); // kWh (ตามที่คุณเก็บโชว์)
+    const power = toNum(raw[oidPower]);
+    const energy = toNum(raw[oidEnergy]);
 
     const outlets = [];
     for (let i = 1; i <= 8; i++) {
-      const oid = normalizeOid(`${base}.5.1.2.${i}`); // คุณ snmpget แล้วได้ INTEGER: 1
-      const v = raw[oid];
-      const n = Number(v);
-      outlets.push(parseAtenOutletState(Number.isFinite(n) ? n : NaN));
+      const oid = normalizeOid(`${outletStatusBase}.${i}`);
+      outlets.push(parseAtenOutletState(raw[oid]));
     }
 
-    // ถ้าดึง subtree ได้ แต่ค่าเป็น NaN หมด อาจเป็นรุ่น/branch คนละชุด
-    // อย่างน้อยให้ถือว่า ONLINE ถ้าคุย SNMP ได้
     return {
       id: pdu.id,
       name: pdu.name,
@@ -119,7 +136,7 @@ async function pollAten(pdu) {
       error: err?.message || String(err),
     };
   } finally {
-    session.close();
+    try { session.close(); } catch {}
   }
 }
 

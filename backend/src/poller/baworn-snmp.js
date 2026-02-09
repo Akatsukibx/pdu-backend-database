@@ -58,6 +58,34 @@ function mapOutlet(v) {
   return null;
 }
 
+// ✅ ถ้า current เพี้ยน ไม่สอดคล้องกับ power/voltage → ปรับ current = power/voltage
+function reconcileCurrentWithPower({ voltage, current, power }) {
+  const v = Number(voltage);
+  const i = Number(current);
+  const p = Number(power);
+
+  // ต้องมี V และ P ก่อน
+  if (!Number.isFinite(v) || v <= 0) return current;
+  if (!Number.isFinite(p) || p < 0) return current;
+
+  const iCalc = p / v;
+
+  // ถ้า current เดิมใช้ไม่ได้ → ใช้ iCalc เลย
+  if (!Number.isFinite(i) || i < 0) return iCalc;
+
+  // เทียบความต่าง P_from_I กับ P จริง
+  const pFromI = v * i;
+  const diffPct = Math.abs(pFromI - p) / Math.max(1, p); // กันหาร 0
+
+  // เกณฑ์: ต่างเกิน 30% หรือ current เล็กผิดปกติเมื่อเทียบกับ iCalc
+  // (เช่นของคุณ 0.22A vs 1.35A)
+  if (diffPct > 0.30 || (iCalc > 0.2 && i < iCalc * 0.5)) {
+    return iCalc;
+  }
+
+  return i;
+}
+
 async function pollBaworn(pdu) {
   const cfg = oids?.baworn;
   if (!cfg?.map?.voltage || !cfg?.map?.outletBase) {
@@ -96,8 +124,11 @@ async function pollBaworn(pdu) {
     const pRaw = cfg.map.power ? base[normalizeOid(cfg.map.power)] : null;
 
     const voltage = applyScale(vRaw, cfg.scale?.voltage ?? 1);
-    const current = applyScale(cRaw, cfg.scale?.current ?? 1);
-    const power   = applyScale(pRaw, cfg.scale?.power ?? 1);
+    let current = applyScale(cRaw, cfg.scale?.current ?? 1);
+    const power = applyScale(pRaw, cfg.scale?.power ?? 1);
+
+    // ✅ FIX: ทำให้ current สอดคล้องกับ power/voltage
+    current = reconcileCurrentWithPower({ voltage, current, power });
 
     // 2) outlet 12 ports
     const outletBase = normalizeOid(cfg.map.outletBase);
