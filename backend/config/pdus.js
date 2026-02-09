@@ -257,14 +257,14 @@ module.exports = {
     },
     {
       name: "UB-003",
-      ip: "10.220.74.13",
+      ip: "10.220.74.10",
       community: "administrator",
       brand: "ATEN",
       model: "PE6208AV",
     },
     {
       name: "UB-003",
-      ip: "10.220.74.14",
+      ip: "10.220.74.11",
       community: "administrator",
       brand: "ATEN",
       model: "PE6208AV",

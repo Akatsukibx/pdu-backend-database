@@ -204,10 +204,6 @@ const RoomView = ({ pduId, pduName, onBack }) => {
                                 <div style={styles.paramValue}>{metrics.voltage} V</div>
                             </div>
                             <div>
-                                <div style={styles.paramLabel}>Energy (kWh)</div>
-                                <div style={styles.paramValue}>{metrics.energy} kWh</div>
-                            </div>
-                            <div>
                                 <div style={styles.paramLabel}>Last Updated</div>
                                 <div style={styles.paramValue}>
                                     {pdu.status.uptime} {/* นี่คือค่าที่แปลงมาจาก last_seen ใน Service ด้านบน */}
