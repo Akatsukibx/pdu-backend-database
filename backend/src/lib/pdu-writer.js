@@ -34,6 +34,26 @@ function getMaxPortFromOutletsDetail(outletsDetail, fallback = 8) {
   return max;
 }
 
+// ✅ รองรับทั้ง outlets_detail (object) และ outlets (array)
+function normalizeOutletsDetail(result) {
+  // 1) ถ้ามีอยู่แล้ว ใช้เลย
+  if (result?.outlets_detail && typeof result.outlets_detail === "object") {
+    return result.outlets_detail;
+  }
+
+  // 2) ถ้าเป็น array เช่น ["ON","OFF",...]
+  if (Array.isArray(result?.outlets)) {
+    const o = {};
+    for (let i = 0; i < result.outlets.length; i++) {
+      o[`Port${i + 1}`] = result.outlets[i];
+    }
+    return o;
+  }
+
+  // 3) ไม่มีจริง ๆ
+  return null;
+}
+
 async function ensureDevice({ name, ip, model, community, status }) {
   const st = String(status || "OFFLINE").toUpperCase();
 
@@ -96,7 +116,6 @@ async function updateUsageSession(pduId, currentA, polledAt) {
   const active = rows[0];
 
   if (isUsing) {
-    // ✅ start if no active
     if (!active) {
       await pool.query(
         `
@@ -110,7 +129,6 @@ async function updateUsageSession(pduId, currentA, polledAt) {
       return;
     }
 
-    // ✅ keep alive (update last_current + updated_at)
     await pool.query(
       `
       UPDATE public.pdu_usage_sessions
@@ -123,7 +141,6 @@ async function updateUsageSession(pduId, currentA, polledAt) {
     return;
   }
 
-  // ✅ stop if active exists
   if (active) {
     await pool.query(
       `
@@ -195,17 +212,13 @@ async function upsertPduCurrentAndHistory(pduId, data) {
 }
 
 async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
-  // outletsDetail ตัวอย่าง: { Port1:"ON", Port2:"OFF", ... }
   const polledAt = new Date();
 
-  // ✅ dynamic outlet count (เช่น BAWORN จะได้ 12)
   const outletCount = getMaxPortFromOutletsDetail(outletsDetail, 8);
 
   for (let i = 1; i <= outletCount; i++) {
-    // ถ้าไม่มี key PortX จะเป็น null (ปลอดภัยกว่า ไม่เดา)
     const status = outletsDetail?.[`Port${i}`] ?? null;
 
-    // ensure outlet row
     const { rows } = await pool.query(
       `
       INSERT INTO pdu_outlets (pdu_id, outlet_no, name)
@@ -219,7 +232,6 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
 
     const outletId = rows[0].id;
 
-    // outlet current
     await pool.query(
       `
       INSERT INTO pdu_outlet_status_current (outlet_id, status, updated_at)
@@ -232,7 +244,6 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
       [outletId, status]
     );
 
-    // outlet history
     await pool.query(
       `
       INSERT INTO pdu_outlet_status_history (outlet_id, status, polled_at)
@@ -243,16 +254,7 @@ async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
   }
 }
 
-/**
- * ✅ savePollResult behavior:
- * - ONLINE  : upsert device + upsert current/history + outlets
- * - OFFLINE : upsert device(status OFFLINE) ONLY แล้ว return
- *
- * ✅ OFFLINE จะไม่ไปทับค่าใน pdu_status_current/outlet_current เดิม
- * เพื่อให้ค่า last known ยังอยู่ (หรือจะให้ view ตัดโชว์เองก็ได้)
- */
 async function savePollResult(pduConfig, result) {
-  // ✅ ip fallback หลายแบบ
   const ip =
     result.ip ||
     pduConfig.ip ||
@@ -265,13 +267,9 @@ async function savePollResult(pduConfig, result) {
     );
   }
 
-  // ✅ model: เอาจาก result ก่อน ถ้าไม่มีเอาจาก config
   const model = result.model || pduConfig.model || null;
-
-  // ✅ สำคัญ: status ต้องมาจาก poller
   const status = String(result.status || "OFFLINE").toUpperCase();
 
-  // ✅ 1) OFFLINE ก็ insert/update device ได้
   const pduId = await ensureDevice({
     name: result.name || pduConfig.name,
     ip,
@@ -280,14 +278,11 @@ async function savePollResult(pduConfig, result) {
     status,
   });
 
-  // ✅ 2) OFFLINE: จบตรงนี้ ไม่เขียนตารางอื่น (แต่ปิด usage session ได้)
   if (status !== "ONLINE") {
-    // ✅ ถ้าเครื่องหาย/ออฟไลน์ ให้ถือว่าไม่ใช้งาน -> ปิด session ถ้ามี
     await updateUsageSession(pduId, 0, new Date());
     return;
   }
 
-  // ✅ 3) ONLINE: เขียน metrics + outlets ตามเดิม
   await upsertPduCurrentAndHistory(pduId, {
     voltage: numOrNull(result.voltage),
     current: numOrNull(result.current),
@@ -296,7 +291,9 @@ async function savePollResult(pduConfig, result) {
     alarm: null,
   });
 
-  await ensureOutletsAndSaveStatus(pduId, result.outlets_detail);
+  // ✅ รับได้ทั้ง outlets_detail และ outlets(array)
+  const outletsDetail = normalizeOutletsDetail(result);
+  await ensureOutletsAndSaveStatus(pduId, outletsDetail);
 }
 
 module.exports = { savePollResult };

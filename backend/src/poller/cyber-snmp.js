@@ -32,20 +32,23 @@ function snmpGet(session, oidList) {
   });
 }
 
+// ✅ กัน TooBig: แบ่งยิงเป็น batch เล็กๆ
+async function snmpGetBatched(session, oidList, batchSize = 6) {
+  const list = oidList.map(normalizeOid).filter(Boolean);
+  const out = {};
+  for (let i = 0; i < list.length; i += batchSize) {
+    const chunk = list.slice(i, i + batchSize);
+    const part = await snmpGet(session, chunk);
+    Object.assign(out, part);
+  }
+  return out;
+}
+
 function toNum(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : NaN;
 }
 
-/**
- * ✅ CyberPower รุ่นที่คุณเจอ สเกลประมาณนี้:
- * - voltage: 2215 => 221.5V (x10)
- * - current: 1800 => 18.00A (x100)
- * - energy : 40510 => 405.10 kWh (x100)
- * - power  : มักเป็น W ตรง ๆ (เช่น 1850 => 1850W)
- *
- * ถ้าค่าออกมาดู “ใหญ่เกินจริง” ให้ normalize ตาม threshold
- */
 function scaleCyberVoltage(v) {
   const n = toNum(v);
   if (!Number.isFinite(n)) return NaN;
@@ -55,26 +58,22 @@ function scaleCyberVoltage(v) {
 function scaleCyberCurrent(v) {
   const n = toNum(v);
   if (!Number.isFinite(n)) return NaN;
-  // 1800 => 18.00A
   return n > 100 ? n / 100 : n;
 }
 
 function scaleCyberEnergy(v) {
   const n = toNum(v);
   if (!Number.isFinite(n)) return NaN;
-  // 40510 => 405.10kWh
   return n > 1000 ? n / 100 : n;
 }
 
 function scaleCyberPower(v) {
   const n = toNum(v);
   if (!Number.isFinite(n)) return NaN;
-  // ส่วนใหญ่เป็นวัตต์ตรง ๆ
   return n;
 }
 
-// ✅ Cyber outlet status (ชุด “ตรงเว็บ” ที่คุณตาม diff)
-// บางเครื่อง/บาง OID จะเป็น 1/2 = ON/OFF
+// outlet status (บางรุ่น = 1/2)
 function parseCyberOutletStatus(v) {
   const n = Number(v);
   if (n === 1) return "ON";
@@ -82,32 +81,24 @@ function parseCyberOutletStatus(v) {
   return "N/A";
 }
 
-// (fallback) OID อีกชุดที่คุณเคยใช้ (พบบางเครื่องเป็น 0/3 หรือ 0/1)
+// fallback (บางรุ่น = 0/3)
 function parseCyberOutletFallback(v) {
   const n = Number(v);
   if (n === 1) return "ON";
   if (n === 0) return "OFF";
-
-  // เคยเห็นจากบางเครื่อง:
   if (n === 3) return "ON";
   if (n === 2) return "OFF";
-
   return "N/A";
 }
 
-/**
- * บางเครื่อง “กลับขั้ว” (เช่น อ่านได้เป็น 3 ทั้งหมดแต่หน้าเว็บ OFF)
- * ให้ลองกลับ mapping เมื่อพบ pattern น่าสงสัย
- */
 function maybeFlipOutlets(outlets) {
-  // ถ้าได้ ON ทั้ง 8 ช่อง แต่ power/current = 0 และหน้าเว็บมัก OFF -> มีโอกาส mapping กลับ
   const onCount = outlets.filter((x) => x === "ON").length;
   const offCount = outlets.filter((x) => x === "OFF").length;
-
-  // ถ้าค่าที่อ่านได้เป็น "ON" เยอะมาก และแทบไม่มี OFF เลย อาจเป็นคนละ semantic (enable vs relay)
-  // เรา “ไม่ flip แบบบังคับ” เพราะเสี่ยง แต่จะคืนค่าเดิมไว้
-  // (ถ้าคุณอยาก flip จริง ๆ บอกได้ ผมจะใส่เงื่อนไขตาม current/power เพิ่ม)
   return { outlets, flipped: false, onCount, offCount };
+}
+
+function isZeroish(n, eps = 0.000001) {
+  return Number.isFinite(n) && Math.abs(n) <= eps;
 }
 
 async function pollCyberpower(pdu) {
@@ -119,9 +110,9 @@ async function pollCyberpower(pdu) {
       (oids.cyber && oids.cyber.map) ||
       {};
 
-    // ✅ ถ้า config/oids.js ไม่มี ก็ใช้ค่า default ที่คุณพิสูจน์แล้ว
+    // line table
     const OID_VOLT = normalizeOid(
-      map.voltage || "1.3.6.1.4.1.3808.1.1.3.5.7.0"
+      map.voltage || "1.3.6.1.4.1.3808.1.1.3.2.3.1.1.6.1"
     );
     const OID_AMP = normalizeOid(
       map.current || "1.3.6.1.4.1.3808.1.1.3.2.3.1.1.7.1"
@@ -133,62 +124,141 @@ async function pollCyberpower(pdu) {
       map.energy || "1.3.6.1.4.1.3808.1.1.3.2.3.1.1.10.1"
     );
 
-    // ✅ Outlet Status “ชุดตรงเว็บ” (ที่คุณตั้งไว้)
+    // outlet power base (W ต่อช่อง)
+    const OUTLET_POWER_BASE = normalizeOid(
+      map.outletPowerBase || "1.3.6.1.4.1.3808.1.1.3.3.5.1.1.8"
+    );
+
+    // outlet status base
     const OUTLET_STATUS_BASE = normalizeOid(
       map.outletStatusBase || "1.3.6.1.4.1.3808.1.1.3.3.3.1.1.4"
     );
 
-    // ✅ fallback base (OID เดิมที่คุณใช้)
     const OUTLET_FALLBACK_BASE = normalizeOid(
       map.outletFallbackBase ||
         map.outletBase ||
         "1.3.6.1.4.1.3808.1.1.3.3.4.1.1.4"
     );
 
-    const outletStatusOids = [];
-    for (let i = 1; i <= 8; i++) outletStatusOids.push(`${OUTLET_STATUS_BASE}.${i}`);
-
-    const outletFallbackOids = [];
-    for (let i = 1; i <= 8; i++) outletFallbackOids.push(`${OUTLET_FALLBACK_BASE}.${i}`);
-
-    // ยิงชุดหลักก่อน
-    const wantMain = [OID_VOLT, OID_AMP, OID_WATT, OID_ENERGY, ...outletStatusOids];
-    let raw = await snmpGet(session, wantMain);
-
-    // เช็คว่าชุด outlet หลัก “ได้ค่าจริง” ไหม
-    const anyMainOutlet = outletStatusOids.some(
-      (oid) => raw[normalizeOid(oid)] !== undefined
+    // ---- 1) GET line values (เล็กๆ ไม่ TooBig) ----
+    let raw = await snmpGetBatched(
+      session,
+      [OID_VOLT, OID_AMP, OID_WATT, OID_ENERGY],
+      4
     );
 
-    // ถ้าไม่ได้ outlet หลักเลย -> ยิง fallback เพิ่ม
+    // ---- 2) GET outlet power 8 ช่อง (batch) ----
+    const outletPowerOids = [];
+    for (let i = 1; i <= 8; i++) outletPowerOids.push(`${OUTLET_POWER_BASE}.${i}`);
+    const rawPower = await snmpGetBatched(session, outletPowerOids, 4);
+    raw = { ...raw, ...rawPower };
+
+    // ---- 3) GET outlet status 8 ช่อง (batch) ----
+    const outletStatusOids = [];
+    for (let i = 1; i <= 8; i++) outletStatusOids.push(`${OUTLET_STATUS_BASE}.${i}`);
+    let rawStatus = await snmpGetBatched(session, outletStatusOids, 4);
+
+    // ถ้า status base ไม่ได้เลย -> fallback base
+    const anyMainOutlet = outletStatusOids.some(
+      (oid) => rawStatus[normalizeOid(oid)] !== undefined
+    );
     if (!anyMainOutlet) {
-      const rawFb = await snmpGet(session, outletFallbackOids);
-      raw = { ...raw, ...rawFb };
+      const outletFallbackOids = [];
+      for (let i = 1; i <= 8; i++) outletFallbackOids.push(`${OUTLET_FALLBACK_BASE}.${i}`);
+      const rawFb = await snmpGetBatched(session, outletFallbackOids, 4);
+      rawStatus = { ...rawStatus, ...rawFb };
     }
 
-    // ✅ normalize หน่วย (แก้ค่า V แปลกๆ + kWh เพี้ยน)
+    raw = { ...raw, ...rawStatus };
+
+    // ---------- line values ----------
     const voltage = scaleCyberVoltage(raw[OID_VOLT]);
-    const current = scaleCyberCurrent(raw[OID_AMP]);
-    const power = scaleCyberPower(raw[OID_WATT]);
+    const lineCurrent = scaleCyberCurrent(raw[OID_AMP]);
+    const linePower = scaleCyberPower(raw[OID_WATT]);
     const energy = scaleCyberEnergy(raw[OID_ENERGY]);
 
-    // outlets
+    // ---------- outlet sum ----------
+    let outletPowerSum = 0;
+    let outletPowerSeen = 0;
+    const outletWatts = [];
+    for (let i = 1; i <= 8; i++) {
+      const oid = normalizeOid(`${OUTLET_POWER_BASE}.${i}`);
+      const w = Number(raw[oid]) || 0;
+      if (raw[oid] !== undefined) outletPowerSeen++;
+      outletPowerSum += w;
+      outletWatts.push(w);
+    }
+
+    // ---------- outlets status parse ----------
     const outlets = [];
     for (let i = 1; i <= 8; i++) {
       const mainOid = normalizeOid(`${OUTLET_STATUS_BASE}.${i}`);
       const fbOid = normalizeOid(`${OUTLET_FALLBACK_BASE}.${i}`);
 
-      if (raw[mainOid] !== undefined) {
-        outlets.push(parseCyberOutletStatus(raw[mainOid]));
-      } else if (raw[fbOid] !== undefined) {
-        outlets.push(parseCyberOutletFallback(raw[fbOid]));
-      } else {
-        outlets.push("N/A");
+      if (raw[mainOid] !== undefined) outlets.push(parseCyberOutletStatus(raw[mainOid]));
+      else if (raw[fbOid] !== undefined) outlets.push(parseCyberOutletFallback(raw[fbOid]));
+      else outlets.push("N/A");
+    }
+
+    const chk = maybeFlipOutlets(outlets);
+
+    // ============================================================
+    // ✅ KEY FIX: ถ้า "Device Load" เป็น 0 จริง -> suppress ค่า outlet watt ค้าง
+    //
+    // หลักคิด:
+    // - ถ้า lineCurrent=0 และ linePower=0 (เหมือนหน้าเว็บ) => PDU OFF/ไม่จ่ายจริง
+    // - ในกรณีนี้ outlet watt บางรุ่นอาจค้าง/เป็น last measured -> ห้ามเอาไปคิด
+    // ============================================================
+    const lineSaysOff =
+      (Number.isFinite(linePower) && isZeroish(linePower)) &&
+      (Number.isFinite(lineCurrent) && isZeroish(lineCurrent));
+
+    // บางรุ่น status OID บอก OFF ทั้งหมด (แม้จะไม่ 100% reliable) แต่ใช้เป็นตัวช่วยได้
+    const allOutletsOffByStatus =
+      chk.outlets.filter((x) => x === "OFF").length === 8;
+
+    const deviceShouldSuppress = lineSaysOff || allOutletsOffByStatus;
+
+    // ---------- auto-switch (แต่ต้องเคารพ suppress ก่อน) ----------
+    let power = linePower;
+    let current = lineCurrent;
+
+    if (deviceShouldSuppress) {
+      // ✅ บังคับเป็น 0 ทั้งหมด ไม่ให้กระทบส่วนอื่น
+      power = 0;
+      current = 0;
+
+      // บังคับ outlets เป็น OFF
+      for (let i = 0; i < 8; i++) chk.outlets[i] = "OFF";
+
+      // outlet watt table แม้จะอ่านได้ ก็ไม่เอาไปใช้ (ถือว่า 0)
+      for (let i = 0; i < outletWatts.length; i++) outletWatts[i] = 0;
+      outletPowerSum = 0;
+    } else {
+      // ✅ ใช้ logic เดิม: ถ้า outlet sum มีเหตุผลกว่า linePower -> สลับมาใช้ sum
+      const lineOk = Number.isFinite(linePower) && linePower >= 0;
+      const sumOk =
+        outletPowerSeen > 0 && Number.isFinite(outletPowerSum) && outletPowerSum > 0;
+
+      if (lineOk && sumOk) {
+        const diffPct = Math.abs(outletPowerSum - linePower) / Math.max(1, linePower);
+        if (diffPct > 0.2) {
+          power = outletPowerSum;
+          current =
+            Number.isFinite(voltage) && voltage > 0 ? power / voltage : NaN;
+        }
+      } else if (sumOk) {
+        power = outletPowerSum;
+        current =
+          Number.isFinite(voltage) && voltage > 0 ? power / voltage : NaN;
       }
     }
 
-    // optional: detect suspicious mapping (ยังไม่ flip อัตโนมัติ)
-    const chk = maybeFlipOutlets(outlets);
+    // ✅ สร้าง outlets_detail ให้ pdu-writer.js ใช้
+    const outlets_detail = {};
+    for (let i = 1; i <= 8; i++) {
+      outlets_detail[`Port${i}`] = chk.outlets[i - 1]; // "ON"/"OFF"/"N/A"
+    }
 
     return {
       id: pdu.id,
@@ -199,7 +269,16 @@ async function pollCyberpower(pdu) {
       current,
       power,
       energy,
+
+      // ใช้ writer
+      outlets_detail,
+
+      // เผื่อ frontend ยังใช้ array
       outlets: chk.outlets,
+
+      // debug flag (ถ้าคุณอยากเอาไปโชว์ badge)
+      suppressed: deviceShouldSuppress ? true : false,
+
       error: "",
     };
   } catch (err) {
@@ -212,7 +291,18 @@ async function pollCyberpower(pdu) {
       current: NaN,
       power: NaN,
       energy: NaN,
+      outlets_detail: {
+        Port1: "N/A",
+        Port2: "N/A",
+        Port3: "N/A",
+        Port4: "N/A",
+        Port5: "N/A",
+        Port6: "N/A",
+        Port7: "N/A",
+        Port8: "N/A",
+      },
       outlets: Array(8).fill("N/A"),
+      suppressed: false,
       error: err?.message || String(err),
     };
   } finally {
