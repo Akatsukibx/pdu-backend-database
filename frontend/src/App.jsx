@@ -16,6 +16,17 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 // ✅ heartbeat ping ให้ last_seen ขยับ
 const HEARTBEAT_MS = 60000; // 1 นาที
 
+const TH_DATETIME_FMT = new Intl.DateTimeFormat('th-TH', {
+  timeZone: 'Asia/Bangkok',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false, // ✅ 24 ชั่วโมง
+});
+
 // ใช้ deviceId จำกัดจำนวนอุปกรณ์
 function getDeviceId() {
   const key = 'pdu_device_id';
@@ -218,8 +229,8 @@ const App = () => {
           <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>☰</button>
 
           <div className="clock">
-            {now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-          </div>
+  {TH_DATETIME_FMT.format(now)}
+</div>
 
           <button onClick={logout} style={btnStyle}>Logout</button>
         </div>

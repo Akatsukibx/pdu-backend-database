@@ -49,8 +49,8 @@ const fetchWithAuth = async (url, options = {}) => {
     const msg = await readErrorText(res);
 
     const err = new Error(msg || res.statusText || `HTTP ${res.status}`);
-    err.status = res.status;          // ✅ สำคัญ: App.jsx จะเช็ค error.status === 401
-    err.responseText = msg || "";     // ✅ เผื่อ debug
+    err.status = res.status; // ✅ สำคัญ: App.jsx จะเช็ค error.status === 401
+    err.responseText = msg || ""; // ✅ เผื่อ debug
     throw err;
   }
 
@@ -96,6 +96,40 @@ const isDebug = () => {
   } catch {
     return false;
   }
+};
+
+/**
+ * ✅ Parse/Format เวลาไทย (สำหรับ Postgres timestamp without time zone)
+ * updated_at ตัวอย่าง: "2026-02-09 11:32:16.396477"
+ */
+const parsePgTimestampAsThai = (ts) => {
+  if (!ts) return null;
+  let s = String(ts).trim();
+
+  // "YYYY-MM-DD HH:mm:ss.xxx" -> "YYYY-MM-DDTHH:mm:ss.xxx"
+  if (s.includes(" ") && !s.includes("T")) s = s.replace(" ", "T");
+
+  // ถ้าไม่มี timezone ต่อท้าย ให้ตีความว่าเป็นเวลาไทย +07:00
+  if (!/[zZ]$/.test(s) && !/[+-]\d{2}:\d{2}$/.test(s)) {
+    s += "+07:00";
+  }
+
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const formatThaiDateTime = (dateObj) => {
+  if (!dateObj) return "-";
+  return new Intl.DateTimeFormat("th-TH", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(dateObj);
 };
 
 /**
@@ -171,7 +205,7 @@ export const fetchPDUMonitor = async (pduId) => {
 };
 
 const transformMonitorData = (data) => {
-  const { info, status, outlets } = data || {};
+  const { info, status, outlets, usage } = data || {};
 
   const formatNum = (num, decimals = 2) => {
     const n = Number(num);
@@ -179,6 +213,9 @@ const transformMonitorData = (data) => {
   };
 
   const statusUpper = toUpper(status?.connection_status ?? status?.status);
+
+  // ✅ lastUpdated จาก status.updated_at (มาจาก VIEW)
+  const lastUpdated = formatThaiDateTime(parsePgTimestampAsThai(status?.updated_at));
 
   return {
     id: info?.id,
@@ -192,10 +229,28 @@ const transformMonitorData = (data) => {
     status: {
       isOffline: statusUpper !== "ONLINE",
       uptime: status?.uptime || "-",
+
+      // ของเดิม (ถ้ามี)
       lastSeen: status?.last_seen ? new Date(status.last_seen).toLocaleString() : "-",
+
+      // ✅ ของใหม่
+      lastUpdated,
+
       hasAlarm: !!(status?.alarm && status.alarm !== "NORMAL"),
       alarmText: status?.alarm || "NORMAL",
     },
+
+    // ✅ เพิ่ม usage (ไม่กระทบส่วนอื่น)
+    usage: usage
+      ? {
+          isActive: !!usage.is_active,
+          startedAt: usage.started_at,
+          endedAt: usage.ended_at,
+          durationSeconds: Number(usage.duration_seconds || 0),
+          lastCurrent: usage.last_current ?? null,
+        }
+      : null,
+
     metrics: {
       current: formatNum(status?.current, 2),
       power: formatNum(status?.power, 1),
@@ -203,9 +258,13 @@ const transformMonitorData = (data) => {
       temperature: formatNum(status?.temperature, 1),
       energy: formatNum(status?.energy, 2),
       loadBar: {
-        percent: status?.current ? Math.min((Number(status.current) / 20) * 100, 100) : 0,
+        percent: status?.current
+          ? Math.min((Number(status.current) / 20) * 100, 100)
+          : 0,
         color:
-          Number(status?.current) > 16 ? "var(--status-critical)" : "var(--status-online)",
+          Number(status?.current) > 16
+            ? "var(--status-critical)"
+            : "var(--status-online)",
       },
     },
     outlets: (outlets || []).map((o) => ({

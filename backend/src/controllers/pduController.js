@@ -1,3 +1,4 @@
+// pduController.js
 const { pool } = require("../lib/db");
 const moment = require("moment");
 
@@ -56,13 +57,24 @@ exports.getDashboardOverview = async (req, res) => {
 
 /**
  * 2) Device Detail
+ * ✅ ใช้ VIEW: v_pdu_show_name_device_api (มี updated_at)
+ * ✅ เพิ่ม usage session ล่าสุด
  */
 exports.getDeviceDetail = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // ✅ info เดิม (เอาไว้ให้ frontend ใช้ชื่อ/field เดิม ไม่กระทบ)
     const deviceQuery = `SELECT * FROM pdu_devices WHERE id = $1`;
-    const statusQuery = `SELECT * FROM pdu_status_current WHERE pdu_id = $1`;
+
+    // ✅ status ใหม่: ดึงจาก VIEW เพื่อให้ได้ updated_at แบบชัวร์
+    const statusQuery = `
+      SELECT *
+      FROM public.v_pdu_show_name_device_api
+      WHERE id = $1
+      LIMIT 1
+    `;
+
     const outletQuery = `
       SELECT o.id, o.outlet_no, o.name, s.status
       FROM pdu_outlets o
@@ -71,10 +83,20 @@ exports.getDeviceDetail = async (req, res) => {
       ORDER BY o.outlet_no ASC
     `;
 
-    const [device, status, outlets] = await Promise.all([
+    // ✅ usage session ล่าสุด (active หรือจบล่าสุด)
+    const usageQuery = `
+      SELECT id, pdu_id, started_at, ended_at, duration_seconds, is_active, updated_at, last_current
+      FROM public.pdu_usage_sessions
+      WHERE pdu_id = $1
+      ORDER BY started_at DESC
+      LIMIT 1
+    `;
+
+    const [device, status, outlets, usage] = await Promise.all([
       pool.query(deviceQuery, [id]),
       pool.query(statusQuery, [id]),
       pool.query(outletQuery, [id]),
+      pool.query(usageQuery, [id]),
     ]);
 
     if (device.rows.length === 0) {
@@ -85,6 +107,7 @@ exports.getDeviceDetail = async (req, res) => {
       info: device.rows[0],
       status: status.rows[0] || null,
       outlets: outlets.rows || [],
+      usage: usage.rows[0] || null, // ✅ เพิ่มเฉพาะนี้
     });
   } catch (err) {
     console.error("[getDeviceDetail]", err);
@@ -96,29 +119,30 @@ exports.getDeviceDetail = async (req, res) => {
  * 3) History
  */
 exports.getDeviceHistory = async (req, res) => {
-    const { id } = req.params;
-    const { start, end } = req.query;
+  const { id } = req.params;
+  const { start, end } = req.query;
 
-    const startDate = start || moment().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
-    const endDate = end || moment().format('YYYY-MM-DD HH:mm:ss');
+  const startDate =
+    start || moment().subtract(24, "hours").format("YYYY-MM-DD HH:mm:ss");
+  const endDate = end || moment().format("YYYY-MM-DD HH:mm:ss");
 
-    try {
-        console.log("📊 HISTORY REQUEST PDU:", id);
+  try {
+    console.log("📊 HISTORY REQUEST PDU:", id);
 
-        const query = `
-            SELECT polled_at, voltage, current, power, temperature
-            FROM pdu_status_history
-            WHERE pdu_id = $1
-              AND polled_at BETWEEN $2 AND $3
-            ORDER BY polled_at ASC
-        `;
+    const query = `
+      SELECT polled_at, voltage, current, power, temperature
+      FROM pdu_status_history
+      WHERE pdu_id = $1
+        AND polled_at BETWEEN $2 AND $3
+      ORDER BY polled_at ASC
+    `;
 
-        const result = await pool.query(query, [id, startDate, endDate]);
+    const result = await pool.query(query, [id, startDate, endDate]);
 
-        console.log("📈 ROWS:", result.rows.length);
-        res.json(result.rows);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Database error' });
-    }
+    console.log("📈 ROWS:", result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Database error" });
+  }
 };

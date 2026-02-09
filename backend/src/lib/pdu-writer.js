@@ -71,6 +71,75 @@ async function ensureDevice({ name, ip, model, community, status }) {
   return rows[0].id;
 }
 
+/**
+ * ✅ Usage Uptime Session
+ * - current >= threshold => start/keep session
+ * - current <  threshold => stop session + duration_seconds
+ */
+const CURRENT_THRESHOLD = Number(process.env.USAGE_CURRENT_THRESHOLD || 0.05);
+
+async function updateUsageSession(pduId, currentA, polledAt) {
+  const cur = Number(currentA);
+  const isUsing = Number.isFinite(cur) && cur >= CURRENT_THRESHOLD;
+
+  const { rows } = await pool.query(
+    `
+    SELECT id, pdu_id, started_at, ended_at, duration_seconds, is_active
+    FROM public.pdu_usage_sessions
+    WHERE pdu_id = $1 AND is_active = true
+    ORDER BY started_at DESC
+    LIMIT 1
+    `,
+    [pduId]
+  );
+
+  const active = rows[0];
+
+  if (isUsing) {
+    // ✅ start if no active
+    if (!active) {
+      await pool.query(
+        `
+        INSERT INTO public.pdu_usage_sessions
+          (pdu_id, started_at, ended_at, duration_seconds, is_active, last_current, created_at, updated_at)
+        VALUES
+          ($1, $2, NULL, NULL, true, $3, NOW(), NOW())
+        `,
+        [pduId, polledAt, cur]
+      );
+      return;
+    }
+
+    // ✅ keep alive (update last_current + updated_at)
+    await pool.query(
+      `
+      UPDATE public.pdu_usage_sessions
+      SET last_current = $1,
+          updated_at = NOW()
+      WHERE id = $2
+      `,
+      [cur, active.id]
+    );
+    return;
+  }
+
+  // ✅ stop if active exists
+  if (active) {
+    await pool.query(
+      `
+      UPDATE public.pdu_usage_sessions
+      SET ended_at = $1,
+          duration_seconds = GREATEST(0, EXTRACT(EPOCH FROM ($1 - started_at))::int),
+          is_active = false,
+          last_current = $2,
+          updated_at = NOW()
+      WHERE id = $3
+      `,
+      [polledAt, Number.isFinite(cur) ? cur : null, active.id]
+    );
+  }
+}
+
 async function upsertPduCurrentAndHistory(pduId, data) {
   const polledAt = new Date();
 
@@ -120,6 +189,9 @@ async function upsertPduCurrentAndHistory(pduId, data) {
     `UPDATE pdu_devices SET last_seen = $2, status = 'ONLINE' WHERE id = $1`,
     [pduId, polledAt]
   );
+
+  // ✅ update usage session ตาม current (ไม่กระทบ logic เดิม)
+  await updateUsageSession(pduId, data.current ?? null, polledAt);
 }
 
 async function ensureOutletsAndSaveStatus(pduId, outletsDetail) {
@@ -208,8 +280,10 @@ async function savePollResult(pduConfig, result) {
     status,
   });
 
-  // ✅ 2) OFFLINE: จบตรงนี้ ไม่เขียนตารางอื่น
+  // ✅ 2) OFFLINE: จบตรงนี้ ไม่เขียนตารางอื่น (แต่ปิด usage session ได้)
   if (status !== "ONLINE") {
+    // ✅ ถ้าเครื่องหาย/ออฟไลน์ ให้ถือว่าไม่ใช้งาน -> ปิด session ถ้ามี
+    await updateUsageSession(pduId, 0, new Date());
     return;
   }
 
