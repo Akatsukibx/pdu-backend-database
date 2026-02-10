@@ -56,7 +56,7 @@ const Sidebar = ({ activeNode, onSelectNode, pduList, isOpen }) => {
           className={`menu-header ${isExpanded ? "active" : ""}`}
           onClick={() => setIsExpanded(!isExpanded)}
         >
-          <span>Locations / Zones</span>
+          <span>PDU / Zones</span>
           <span className="menu-arrow">▼</span>
         </button>
 

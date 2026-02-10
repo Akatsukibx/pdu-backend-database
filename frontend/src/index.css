@@ -205,7 +205,7 @@ body {
 
 .clock {
     font-family: monospace;
-    color: var(--text-muted);
+    color: var(--text-primary);
 }
 
 .content-scroll {
