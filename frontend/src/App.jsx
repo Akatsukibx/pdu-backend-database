@@ -7,7 +7,7 @@ import DashboardView from './components/DashboardView';
 import LoginView from './components/LoginView';
 import { fetchPDUList } from './api/pduService';
 
-const REFRESH_MS = 300000;
+const REFRESH_MS = 60000; // 1 นาที
 const CLOCK_MS = 1000;
 
 // ✅ backend base
@@ -229,8 +229,8 @@ const App = () => {
           <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>☰</button>
 
           <div className="clock">
-  {TH_DATETIME_FMT.format(now)}
-</div>
+            {TH_DATETIME_FMT.format(now)}
+          </div>
 
           <button onClick={logout} style={btnStyle}>Logout</button>
         </div>
