@@ -9,7 +9,9 @@ const NodeView = ({ location, pduList, onSelectPDU }) => {
     if (name.startsWith("DENT")) return "DENT";
     if (name.startsWith("HP")) return "HP";
 
-    const found = ["ICT", "PN", "PKY", "CE", "UB"].find((z) => name.startsWith(z));
+    const found = ["ICT", "PN", "PKY", "CE", "UB"].find((z) =>
+      name.startsWith(z)
+    );
     if (found) return found;
 
     return "MEETING";
@@ -17,8 +19,13 @@ const NodeView = ({ location, pduList, onSelectPDU }) => {
 
   const searchZone = String(location || "").toUpperCase();
 
-  // ✅ Filter ตาม zone ที่คำนวณได้ (ไม่ต้องเขียน if MEETING เองแล้ว)
-  const pdus = (pduList || []).filter((p) => getZoneFromName(p?.name) === searchZone);
+  // ✅ Filter ตาม zone ที่คำนวณได้
+  const pdus = (pduList || []).filter(
+    (p) => getZoneFromName(p?.name) === searchZone
+  );
+
+  // ✅ โซนพิเศษ: Add PDU (ไม่ต้องแสดง No PDU...)
+  const isAddPduPage = searchZone === "ADD_PDU";
 
   return (
     <div>
@@ -27,7 +34,6 @@ const NodeView = ({ location, pduList, onSelectPDU }) => {
       <div className="room-grid">
         {pdus.length > 0 ? (
           pdus.map((pdu) => {
-            // ✅ รองรับหลายรูปแบบ field (แล้วแต่ pduService ของคุณ)
             const current = pdu?.metrics?.current ?? pdu?.current ?? null;
 
             return (
@@ -57,7 +63,9 @@ const NodeView = ({ location, pduList, onSelectPDU }) => {
 
                 {/* ขวา: Current */}
                 <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>Current</div>
+                  <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                    Current
+                  </div>
 
                   <div style={{ fontSize: "1.2rem", fontWeight: 700 }}>
                     {current != null && Number.isFinite(Number(current))
@@ -68,11 +76,11 @@ const NodeView = ({ location, pduList, onSelectPDU }) => {
               </div>
             );
           })
-        ) : (
+        ) : !isAddPduPage ? (
           <div style={{ padding: "20px", opacity: 0.5 }}>
             No PDU found in this zone.
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

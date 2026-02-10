@@ -1,10 +1,292 @@
-// pduController.js
+// src/controllers/pduController.js
 const { pool } = require("../lib/db");
 const moment = require("moment");
 
+// ------------------------------
+// helpers
+// ------------------------------
+function cleanIp(ip) {
+  const s = String(ip || "").trim();
+  if (!s) return "";
+  return s.split("/")[0]; // กันกรอก 10.x.x.x/32 มา
+}
+
+function toInt(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+// ===============================
+// ✅ 0) PDU Management APIs
+// ===============================
+
 /**
- * 0) Dashboard Summary
- * - รวมค่า power / current จาก DB
+ * GET /api/pdus
+ * - list PDU ทั้งหมด (รวม inactive)
+ */
+exports.listPDUs = async (req, res) => {
+  try {
+    const q = `
+      SELECT
+        id,
+        name,
+        split_part(ip_address::text,'/',1) AS ip_address,
+        brand,
+        model,
+        location,
+        snmp_version,
+        snmp_port,
+        snmp_community,
+        snmp_timeout_ms,
+        snmp_retries,
+        is_active
+      FROM public.pdu_devices
+      ORDER BY id ASC;
+    `;
+    const { rows } = await pool.query(q);
+    res.json(rows);
+  } catch (err) {
+    console.error("[listPDUs]", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+/**
+ * POST /api/pdus
+ * - เพิ่ม PDU ใหม่ลง DB
+ */
+exports.createPDU = async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    const name = String(body.name || "").trim();
+    const ip_address = cleanIp(body.ip_address);
+    const brand = String(body.brand || "").trim().toUpperCase();
+    const model = String(body.model || "").trim();
+    const location = body.location ?? null;
+
+    const snmp_version = String(body.snmp_version || "2c").toLowerCase();
+    const snmp_port = toInt(body.snmp_port, 161);
+    const snmp_community = body.snmp_community ?? null;
+    const snmp_timeout_ms = toInt(body.snmp_timeout_ms, 2000);
+    const snmp_retries = toInt(body.snmp_retries, 1);
+    const is_active = typeof body.is_active === "boolean" ? body.is_active : true;
+
+    // validations
+    if (!name) return res.status(400).json({ error: "name is required" });
+    if (!ip_address) return res.status(400).json({ error: "ip_address is required" });
+    if (!brand) return res.status(400).json({ error: "brand is required" });
+    if (!model) return res.status(400).json({ error: "model is required" });
+
+    if (snmp_version === "2c" && !snmp_community) {
+      return res.status(400).json({ error: "snmp_community is required for SNMP v2c" });
+    }
+
+    const q = `
+      INSERT INTO public.pdu_devices
+      (name, ip_address, brand, model, location,
+       snmp_version, snmp_port, snmp_community,
+       snmp_timeout_ms, snmp_retries, is_active)
+      VALUES
+      ($1, $2::inet, $3, $4, $5,
+       $6, $7, $8,
+       $9, $10, $11)
+      RETURNING
+        id,
+        name,
+        split_part(ip_address::text,'/',1) AS ip_address,
+        brand,
+        model,
+        location,
+        snmp_version,
+        snmp_port,
+        snmp_community,
+        snmp_timeout_ms,
+        snmp_retries,
+        is_active;
+    `;
+
+    const params = [
+      name,
+      ip_address,
+      brand,
+      model,
+      location,
+      snmp_version,
+      snmp_port,
+      snmp_community,
+      snmp_timeout_ms,
+      snmp_retries,
+      Boolean(is_active),
+    ];
+
+    const { rows } = await pool.query(q, params);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    // ถ้าคุณทำ UNIQUE(ip_address) แล้ว จะชนตรงนี้
+    if (err && err.code === "23505") {
+      return res.status(409).json({ error: "duplicate key (maybe ip_address already exists)" });
+    }
+    console.error("[createPDU]", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+/**
+ * PUT /api/pdus/:id
+ * - แก้ไข PDU (แก้บาง field ได้)
+ */
+exports.updatePDU = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const body = req.body || {};
+
+    // ถ้าไม่ส่งมา = null เพื่อให้ COALESCE ใช้ของเดิม
+    const name = body.name != null ? String(body.name).trim() : null;
+    const ip_address = body.ip_address != null ? cleanIp(body.ip_address) : null;
+
+    const brand =
+      body.brand != null ? String(body.brand).trim().toUpperCase() : null;
+
+    const model = body.model != null ? String(body.model).trim() : null;
+    const location = body.location !== undefined ? body.location : null;
+
+    const snmp_version =
+      body.snmp_version != null ? String(body.snmp_version).toLowerCase() : null;
+
+    const snmp_port = body.snmp_port != null ? toInt(body.snmp_port, 161) : null;
+    const snmp_community =
+      body.snmp_community !== undefined ? body.snmp_community : null;
+
+    const snmp_timeout_ms =
+      body.snmp_timeout_ms != null ? toInt(body.snmp_timeout_ms, 2000) : null;
+
+    const snmp_retries =
+      body.snmp_retries != null ? toInt(body.snmp_retries, 1) : null;
+
+    const is_active =
+      typeof body.is_active === "boolean" ? body.is_active : null;
+
+    // ถ้าจะตั้งเป็น v2c ต้องมี community (ทั้งของใหม่หรือของเดิม)
+    // ทำแบบปลอดภัย: เช็คค่าปัจจุบันก่อน
+    const currentQ = `
+      SELECT snmp_version, snmp_community
+      FROM public.pdu_devices
+      WHERE id = $1
+      LIMIT 1
+    `;
+    const current = await pool.query(currentQ, [id]);
+    if (current.rows.length === 0) {
+      return res.status(404).json({ error: "PDU not found" });
+    }
+
+    const finalVersion = (snmp_version ?? current.rows[0].snmp_version ?? "2c").toLowerCase();
+    const finalCommunity = snmp_community ?? current.rows[0].snmp_community;
+
+    if (finalVersion === "2c" && !finalCommunity) {
+      return res.status(400).json({ error: "snmp_community is required for SNMP v2c" });
+    }
+
+    const q = `
+      UPDATE public.pdu_devices
+      SET
+        name           = COALESCE($2, name),
+        ip_address     = COALESCE($3::inet, ip_address),
+        brand          = COALESCE($4, brand),
+        model          = COALESCE($5, model),
+        location       = COALESCE($6, location),
+        snmp_version   = COALESCE($7, snmp_version),
+        snmp_port      = COALESCE($8, snmp_port),
+        snmp_community = COALESCE($9, snmp_community),
+        snmp_timeout_ms= COALESCE($10, snmp_timeout_ms),
+        snmp_retries   = COALESCE($11, snmp_retries),
+        is_active      = COALESCE($12, is_active)
+      WHERE id = $1
+      RETURNING
+        id,
+        name,
+        split_part(ip_address::text,'/',1) AS ip_address,
+        brand,
+        model,
+        location,
+        snmp_version,
+        snmp_port,
+        snmp_community,
+        snmp_timeout_ms,
+        snmp_retries,
+        is_active;
+    `;
+
+    const params = [
+      id,
+      name,
+      ip_address,
+      brand,
+      model,
+      location,
+      snmp_version,
+      snmp_port,
+      snmp_community,
+      snmp_timeout_ms,
+      snmp_retries,
+      is_active,
+    ];
+
+    const { rows } = await pool.query(q, params);
+    res.json(rows[0]);
+  } catch (err) {
+    if (err && err.code === "23505") {
+      return res.status(409).json({ error: "duplicate key (maybe ip_address already exists)" });
+    }
+    console.error("[updatePDU]", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+/**
+ * DELETE /api/pdus/:id
+ * - soft delete -> is_active=false
+ */
+exports.deletePDU = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const q = `
+      UPDATE public.pdu_devices
+      SET is_active = false
+      WHERE id = $1
+      RETURNING
+        id,
+        name,
+        split_part(ip_address::text,'/',1) AS ip_address,
+        brand,
+        model,
+        location,
+        snmp_version,
+        snmp_port,
+        snmp_community,
+        snmp_timeout_ms,
+        snmp_retries,
+        is_active;
+    `;
+
+    const { rows } = await pool.query(q, [id]);
+    if (rows.length === 0) return res.status(404).json({ error: "PDU not found" });
+
+    res.json({ ok: true, device: rows[0] });
+  } catch (err) {
+    console.error("[deletePDU]", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+// ===============================
+// ✅ Dashboard APIs (ของเดิม)
+// ===============================
+
+/**
+ * GET /api/dashboard/summary
  */
 exports.getDashboardSummary = async (req, res) => {
   try {
@@ -32,7 +314,7 @@ exports.getDashboardSummary = async (req, res) => {
 };
 
 /**
- * 1) Dashboard Overview (รายชื่ออุปกรณ์)
+ * GET /api/dashboard
  */
 exports.getDashboardOverview = async (req, res) => {
   try {
@@ -56,18 +338,14 @@ exports.getDashboardOverview = async (req, res) => {
 };
 
 /**
- * 2) Device Detail
- * ✅ ใช้ VIEW: v_pdu_show_name_device_api (มี updated_at)
- * ✅ เพิ่ม usage session ล่าสุด
+ * GET /api/device/:id
  */
 exports.getDeviceDetail = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // ✅ info เดิม (เอาไว้ให้ frontend ใช้ชื่อ/field เดิม ไม่กระทบ)
     const deviceQuery = `SELECT * FROM pdu_devices WHERE id = $1`;
 
-    // ✅ status ใหม่: ดึงจาก VIEW เพื่อให้ได้ updated_at แบบชัวร์
     const statusQuery = `
       SELECT *
       FROM public.v_pdu_show_name_device_api
@@ -83,7 +361,6 @@ exports.getDeviceDetail = async (req, res) => {
       ORDER BY o.outlet_no ASC
     `;
 
-    // ✅ usage session ล่าสุด (active หรือจบล่าสุด)
     const usageQuery = `
       SELECT id, pdu_id, started_at, ended_at, duration_seconds, is_active, updated_at, last_current
       FROM public.pdu_usage_sessions
@@ -107,7 +384,7 @@ exports.getDeviceDetail = async (req, res) => {
       info: device.rows[0],
       status: status.rows[0] || null,
       outlets: outlets.rows || [],
-      usage: usage.rows[0] || null, // ✅ เพิ่มเฉพาะนี้
+      usage: usage.rows[0] || null,
     });
   } catch (err) {
     console.error("[getDeviceDetail]", err);
@@ -116,7 +393,7 @@ exports.getDeviceDetail = async (req, res) => {
 };
 
 /**
- * 3) History
+ * GET /api/history/device/:id?start=...&end=...
  */
 exports.getDeviceHistory = async (req, res) => {
   const { id } = req.params;
@@ -127,8 +404,6 @@ exports.getDeviceHistory = async (req, res) => {
   const endDate = end || moment().format("YYYY-MM-DD HH:mm:ss");
 
   try {
-    console.log("📊 HISTORY REQUEST PDU:", id);
-
     const query = `
       SELECT polled_at, voltage, current, power, temperature
       FROM pdu_status_history
@@ -138,11 +413,9 @@ exports.getDeviceHistory = async (req, res) => {
     `;
 
     const result = await pool.query(query, [id, startDate, endDate]);
-
-    console.log("📈 ROWS:", result.rows.length);
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
+    console.error("[getDeviceHistory]", err);
     res.status(500).json({ error: "Database error" });
   }
 };

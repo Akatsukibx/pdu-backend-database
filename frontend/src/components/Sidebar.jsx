@@ -1,80 +1,111 @@
-// Sidebar.jsx
-import React, { useState } from "react";
-const Sidebar = ({ activeNode, onSelectNode, pduList, isOpen }) => {
-  const [isExpanded, setIsExpanded] = useState(true);
+// src/components/Sidebar.jsx
+import React, { useMemo, useState } from "react";
 
-  // ✅ โซนที่จะแสดงตามที่คุณต้องการ
-  const displayZones = ["ICT", "PN", "PKY", "CE", "UB", "HP", "DENT", "MEETING"];
+const ADD_PDU_KEY = "ADD_PDU";
 
-  // ✅ โซนที่ใช้เช็ค prefix จริง (ไม่รวม MEETING เพราะ MEETING = ที่เหลือ)
-  const prefixZones = ["ICT", "PN", "PKY", "CE", "UB", "HP", "DENT"];
+function pickLocation(p) {
+  // ✅ รองรับหลายชื่อ เผื่อ pduService map ชื่อ field มาไม่ตรง
+  // ลองอ่านจากหลายที่ก่อน
+  return (
+    p?.location ??
+    p?.zone ??
+    p?.site ??
+    p?.area ??
+    p?.node ??
+    p?.group ??
+    p?.loc ??
+    p?.info?.location ??
+    p?.status?.location ??
+    null
+  );
+}
 
-  // ✅ ฟังก์ชันกลาง: แปลง name -> zone
-  const getZoneFromName = (nameRaw = "") => {
-    const name = String(nameRaw).toUpperCase().trim();
+function normalizeLocation(loc) {
+  const s = (loc ?? "").toString().trim();
+  if (!s) return "MEETING";
+  const up = s.toUpperCase();
+  if (up === "NULL" || up === "UNDEFINED" || up === "N/A" || up === "-") return "MEETING";
+  return up;
+}
 
-    // 1) DENT: ให้ห้อง/เครื่องที่ขึ้นต้นด้วย DENT ไปอยู่ DENT (รวม Dent1f3 Dent1f4)
-    if (name.startsWith("DENT")) return "DENT";
+const Sidebar = ({ activeNode, onSelectNode, pduList, loaded, isOpen }) => {
+  const [zonesOpen, setZonesOpen] = useState(true);
 
-    // 2) HP: โรงพยาบาล
-    if (name.startsWith("HP")) return "HP";
+  const zones = useMemo(() => {
+    const countMap = new Map();
 
-    // 3) โซนหลักเดิม
-    const found = ["ICT", "PN", "PKY", "CE", "UB"].find((z) => name.startsWith(z));
-    if (found) return found;
+    (pduList || []).forEach((p) => {
+      const loc = normalizeLocation(pickLocation(p));
+      countMap.set(loc, (countMap.get(loc) || 0) + 1);
+    });
 
-    // 4) ที่เหลือทั้งหมด
-    return "MEETING";
-  };
+    const baseOrder = ["ICT", "PN", "PKY", "CE", "UB", "HP", "DENT", "MEETING"];
 
-  // ✅ group PDUs ตามโซน
-  const groupedPDUs = (pduList || []).reduce((acc, pdu) => {
-    const zone = getZoneFromName(pdu?.name);
-    if (!acc[zone]) acc[zone] = [];
-    acc[zone].push(pdu);
-    return acc;
-  }, {});
+    const baseItems = baseOrder.map((name) => ({
+      name,
+      count: countMap.get(name) || 0,
+    }));
+
+    const extras = Array.from(countMap.entries())
+      .map(([name, count]) => ({ name, count }))
+      .filter((z) => !baseOrder.includes(z.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return [...baseItems, ...extras];
+  }, [pduList]);
 
   return (
     <aside className={`sidebar ${isOpen ? "open" : ""}`}>
-      <div
-        className="sidebar-header"
-        onClick={() => onSelectNode(null)}
-        style={{ cursor: "pointer" }}
-      >
-        PDU MONITOR
-      </div>
+      <div className="sidebar-header">PDU MONITOR</div>
 
       <div className="menu-group">
-        <button className="menu-header active" onClick={() => onSelectNode(null)}>
+        <button
+          className={`node-btn ${activeNode === null ? "active" : ""}`}
+          onClick={() => onSelectNode(null)}
+          disabled={!loaded}
+          type="button"
+        >
           🏠 Dashboard Overview
         </button>
       </div>
 
       <div className="menu-group">
         <button
-          className={`menu-header ${isExpanded ? "active" : ""}`}
-          onClick={() => setIsExpanded(!isExpanded)}
+          className={`menu-header ${zonesOpen ? "" : "collapsed"}`}
+          onClick={() => setZonesOpen((v) => !v)}
+          type="button"
         >
-          <span>PDU / Zones</span>
+          <span>PDU / ZONES</span>
           <span className="menu-arrow">▼</span>
         </button>
 
-        <ul className={`node-list ${isExpanded ? "expanded" : "collapsed"}`}>
-          {displayZones.map((zone) => {
-  const count = groupedPDUs?.[zone]?.length ?? 0;
+        <ul className={`node-list ${zonesOpen ? "expanded" : "collapsed"}`}>
+          <li className="node-action-wrap">
+            <button
+              className={`node-btn node-action-btn ${
+                activeNode === ADD_PDU_KEY ? "active" : ""
+              }`}
+              onClick={() => onSelectNode(ADD_PDU_KEY)}
+              disabled={!loaded}
+              type="button"
+            >
+              <span className="node-icon">＋</span>
+              <span>Add PDU</span>
+            </button>
+          </li>
 
-  return (
-    <li key={zone} className="node-item">
-      <button
-        className={`node-btn ${activeNode === zone ? "active" : ""}`}
-        onClick={() => onSelectNode(zone)}
-      >
-        {zone} ({count})
-      </button>
-    </li>
-  );
-})}
+          {zones.map((z) => (
+            <li key={z.name}>
+              <button
+                className={`node-btn ${activeNode === z.name ? "active" : ""}`}
+                onClick={() => onSelectNode(z.name)}
+                disabled={!loaded}
+                type="button"
+              >
+                {z.name} ({z.count})
+              </button>
+            </li>
+          ))}
         </ul>
       </div>
     </aside>

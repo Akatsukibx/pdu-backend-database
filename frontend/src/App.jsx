@@ -4,18 +4,21 @@ import Sidebar from './components/Sidebar';
 import NodeView from './components/NodeView';
 import RoomView from './components/RoomView';
 import DashboardView from './components/DashboardView';
+import ManagePdusView from './components/AddPduView'; // ✅ เพิ่ม
 import LoginView from './components/LoginView';
 import { fetchPDUList } from './api/pduService';
+import AddPduView from './components/AddPduView';
 
 const REFRESH_MS = 60000; // 1 นาที
 const CLOCK_MS = 1000;
 
-// ✅ backend base
+// backend base
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-// ✅ heartbeat ping ให้ last_seen ขยับ
-const HEARTBEAT_MS = 60000; // 1 นาที
+// heartbeat ping ให้ last_seen ขยับ
+const HEARTBEAT_MS = 60000;
 
+// เวลาไทย
 const TH_DATETIME_FMT = new Intl.DateTimeFormat('th-TH', {
   timeZone: 'Asia/Bangkok',
   year: 'numeric',
@@ -24,10 +27,10 @@ const TH_DATETIME_FMT = new Intl.DateTimeFormat('th-TH', {
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
-  hour12: false, // ✅ 24 ชั่วโมง
+  hour12: false,
 });
 
-// ใช้ deviceId จำกัดจำนวนอุปกรณ์
+// deviceId
 function getDeviceId() {
   const key = 'pdu_device_id';
   let v = localStorage.getItem(key);
@@ -47,7 +50,7 @@ const App = () => {
   const [sessionMessage, setSessionMessage] = useState('');
 
   // ---------------- MAIN ----------------
-  const [selectedNode, setSelectedNode] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(null); // null | location | "__MANAGE__"
   const [selectedPDUId, setSelectedPDUId] = useState(null);
   const [pduList, setPduList] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -110,8 +113,7 @@ const App = () => {
     }
   }, []);
 
-  // ---------------- HEARTBEAT (สำคัญ) ----------------
-  // ✅ ถ้า user เปิดค้างไว้เฉย ๆ ให้ ping ทุก 1 นาที เพื่ออัปเดต last_seen
+  // ---------------- HEARTBEAT ----------------
   useEffect(() => {
     if (!isAuthed) return;
 
@@ -124,7 +126,6 @@ const App = () => {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        // ถ้า session หลุดจริง ให้เด้งออก
         if (!res.ok) {
           const msg = await safeReadError(res);
           const lower = String(msg || '').toLowerCase();
@@ -136,7 +137,7 @@ const App = () => {
           }
         }
       } catch {
-        // เน็ตหลุดชั่วคราว ไม่ต้องเด้งทันที
+        // ignore network error
       }
     }, HEARTBEAT_MS);
 
@@ -154,18 +155,15 @@ const App = () => {
       const list = await fetchPDUList();
       setPduList(list);
     } catch (error) {
-  console.error('Failed to load PDU list', error);
+      console.error('Failed to load PDU list', error);
 
-  const status = error?.status;
-  const msg = String(error?.message || '').toLowerCase();
-
-  if (status === 401 || msg.includes('unauthorized') || msg.includes('session')) {
-    localStorage.removeItem('pdu_token');
-    setSessionMessage('⏰ Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
-    setIsAuthed(false);
-  }
-    } 
-    finally {
+      const msg = String(error?.message || '').toLowerCase();
+      if (msg.includes('unauthorized') || msg.includes('session')) {
+        localStorage.removeItem('pdu_token');
+        setSessionMessage('⏰ Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+        setIsAuthed(false);
+      }
+    } finally {
       isFetchingListRef.current = false;
       if (isFirstLoad) setLoaded(true);
     }
@@ -185,7 +183,8 @@ const App = () => {
     return () => clearInterval(t);
   }, []);
 
-  const derivedPDUName = pduList.find(p => Number(p.id) === Number(selectedPDUId))?.name;
+  const derivedPDUName =
+    pduList.find(p => Number(p.id) === Number(selectedPDUId))?.name;
 
   // ---------------- LOGIN VIEW ----------------
   if (!isAuthed) {
@@ -208,7 +207,6 @@ const App = () => {
   // ---------------- MAIN UI ----------------
   return (
     <>
-      {/* overlay menu (ถ้ามี) */}
       {mobileMenuOpen && (
         <div
           style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 900 }}
@@ -218,7 +216,11 @@ const App = () => {
 
       <Sidebar
         activeNode={selectedNode}
-        onSelectNode={(loc) => { setSelectedNode(loc); setSelectedPDUId(null); setMobileMenuOpen(false); }}
+        onSelectNode={(node) => {
+          setSelectedNode(node);
+          setSelectedPDUId(null);
+          setMobileMenuOpen(false);
+        }}
         pduList={pduList}
         loaded={loaded}
         isOpen={mobileMenuOpen}
@@ -236,6 +238,7 @@ const App = () => {
         </div>
 
         <div className="content-scroll">
+          {/* Dashboard */}
           {!selectedNode && !selectedPDUId && (
             <DashboardView
               pduList={pduList}
@@ -246,7 +249,16 @@ const App = () => {
             />
           )}
 
-          {selectedNode && !selectedPDUId && (
+          {/* Manage PDUs */}
+          {selectedNode === '__MANAGE__' && (
+            <ManagePdusView
+              onChanged={() => loadList(true)}
+            />
+          )}
+          
+
+          {/* Node view */}
+          {selectedNode && selectedNode !== '__MANAGE__' && !selectedPDUId && (
             <NodeView
               location={selectedNode}
               pduList={pduList}
@@ -254,6 +266,23 @@ const App = () => {
             />
           )}
 
+{/* ✅ Add PDU view */}
+{selectedNode === "ADD_PDU" && !selectedPDUId && (
+  <AddPduView
+    onCreated={async (payload) => {
+      // reload list เพื่อให้ sidebar count อัปเดต + poller จะเริ่มดึง
+      await loadList(true);
+
+      // จะเลือกโซนที่เพิ่มเลยก็ได้
+      if (payload?.location) setSelectedNode(String(payload.location).toUpperCase());
+      else setSelectedNode(null);
+
+      setSelectedPDUId(null);
+    }}
+    onCancel={() => setSelectedNode(null)}
+  />
+)}
+          {/* Device view */}
           {selectedPDUId && (
             <RoomView
               pduId={selectedPDUId}

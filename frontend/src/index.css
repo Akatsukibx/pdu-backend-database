@@ -118,6 +118,50 @@ body {
     transform: rotate(-90deg);
 }
 
+/* ✅ NEW: Sidebar Action Button (PDU Management) */
+.menu-action {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+
+    padding: 0.9rem 1.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: inherit;
+
+    border-left: 3px solid transparent;
+    border-bottom: 1px solid var(--border-main);
+
+    transition: all 0.15s ease;
+}
+
+.menu-action:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.menu-action.active {
+    background-color: rgba(52, 152, 219, 0.10);
+    color: var(--accent-blue);
+    border-left-color: var(--accent-blue);
+}
+
+/* ไอคอนใน action ให้เนียน */
+.menu-icon {
+    width: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.95;
+}
+
 .node-list {
     list-style: none;
     padding: 0;
@@ -347,7 +391,6 @@ h2.page-title {
     transition: all 0.2s;
 }
 
-
 /* Mobile Menu Button Base Style */
 .mobile-menu-btn {
     display: none;
@@ -358,4 +401,205 @@ h2.page-title {
     font-size: 1.5rem;
     cursor: pointer;
     margin-right: 1rem;
+}
+
+/* ✅ Add PDU button in PDU / ZONES */
+.node-action {
+  margin: 0.6rem 0.9rem;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  background: rgba(52, 152, 219, 0.10);
+  border: 1px solid rgba(52, 152, 219, 0.25);
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
+.node-action:hover {
+  background: rgba(52, 152, 219, 0.18);
+  border-color: rgba(52, 152, 219, 0.35);
+  transform: translateY(-1px);
+}
+
+.node-action:active {
+  transform: translateY(0px);
+}
+
+.node-action .node-icon {
+  display: inline-flex;
+  width: 18px;
+  justify-content: center;
+  margin-right: 8px;
+  font-weight: 900;
+}
+
+/* ให้ active ของ Add PDU สวยขึ้น */
+.node-action.active {
+  background: rgba(52, 152, 219, 0.20);
+  border-color: rgba(52, 152, 219, 0.55);
+  color: var(--text-primary);
+}
+
+.add-pdu-panel {
+  max-width: 900px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-main);
+  border-radius: 6px;
+  padding: 2rem;
+}
+
+.add-pdu-title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-main);
+  padding-bottom: 0.75rem;
+}
+
+.add-pdu-form {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem 1.5rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group.full {
+  grid-column: 1 / -1;
+}
+
+.form-group label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+.form-group input,
+.form-group select {
+  height: 38px;
+  padding: 0 0.75rem;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  border-radius: 6px;
+  border: 1px solid var(--border-main);
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.form-group input::placeholder {
+  color: var(--text-muted);
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: var(--accent-blue);
+}
+
+.add-pdu-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.btn-primary {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  padding: 0.55rem 1.4rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  border: 1px solid var(--border-main);
+  padding: 0.6rem 1.6rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--accent-blue);
+  color: #fff;
+}
+
+.btn-secondary:active {
+  transform: translateY(1px);
+}
+/* =========================
+   PDU Active Checkbox
+   ========================= */
+.pdu-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+/* ซ่อน checkbox จริง */
+.pdu-checkbox input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* กล่อง checkbox */
+.pdu-checkbox .checkmark {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: #1e2126;
+  border: 1px solid var(--border-main);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+/* checked */
+.pdu-checkbox input:checked + .checkmark {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.pdu-checkbox input:checked + .checkmark::after {
+  content: "✓";
+  font-size: 13px;
+  color: #fff;
+  line-height: 1;
+}
+
+/* hover */
+.pdu-checkbox:hover .checkmark {
+  border-color: var(--accent-blue);
+}
+
+/* ทำให้ checkbox สูงเท่าช่อง input/select และอยู่แนวเดียวกัน */
+.pdu-checkbox{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  height:38px;
+  padding:0 12px;
+  border:1px solid var(--border-main);
+  border-radius:10px;
+  background: rgba(255,255,255,0.03);
+  cursor:pointer;
+  user-select:none;
+}
+
+.pdu-checkbox input{
+  width:18px;
+  height:18px;
+  accent-color: var(--accent-blue);
 }

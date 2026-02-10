@@ -6,7 +6,7 @@ const API_BASE_URL =
   (import.meta.env?.VITE_API_BASE || "http://localhost:8000") + "/api";
 
 // ===============================
-// ✅ Auth helpers
+// ---------- auth helpers ----------
 // ===============================
 const getToken = () => {
   try {
@@ -35,7 +35,7 @@ const readErrorText = async (response) => {
   }
 };
 
-// ✅ fetch wrapper ที่แนบ token + โยน error พร้อม status (ให้ App.jsx จับ 401 ได้ชัวร์)
+// ✅ fetch wrapper ที่แนบ token + โยน error พร้อม status
 const fetchWithAuth = async (url, options = {}) => {
   const res = await fetch(url, {
     ...options,
@@ -47,14 +47,12 @@ const fetchWithAuth = async (url, options = {}) => {
 
   if (!res.ok) {
     const msg = await readErrorText(res);
-
     const err = new Error(msg || res.statusText || `HTTP ${res.status}`);
-    err.status = res.status; // ✅ สำคัญ: App.jsx จะเช็ค error.status === 401
-    err.responseText = msg || ""; // ✅ เผื่อ debug
+    err.status = res.status;
+    err.responseText = msg || "";
     throw err;
   }
 
-  // ✅ ป้องกันกรณี 204/ไม่มี body
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("application/json")) return null;
 
@@ -89,7 +87,6 @@ const toNumOrZero = (v) => {
 
 const toUpper = (v) => String(v ?? "").trim().toUpperCase();
 
-// debug toggle
 const isDebug = () => {
   try {
     return localStorage.getItem("PDU_DEBUG") === "1";
@@ -98,22 +95,160 @@ const isDebug = () => {
   }
 };
 
+const normalizeStatus = (item) => {
+  const raw = toUpper(item?.connection_status ?? item?.status);
+  return raw === "ONLINE" ? "online" : "offline";
+};
+
+const pickPowerFromApi = (item) => {
+  const candidates = [item?.power, item?.watt, item?.power_w, item?.load_w];
+  for (const v of candidates) {
+    const n = toNumOrNull(v);
+    if (n !== null) return n;
+  }
+  return null;
+};
+
 /**
- * ✅ Parse/Format เวลาไทย (สำหรับ Postgres timestamp without time zone)
- * updated_at ตัวอย่าง: "2026-02-09 11:32:16.396477"
+ * ✅ อนุมานโซนจาก "ชื่อเครื่อง"
+ * - ICT1104/1 -> ICT
+ * - PN1 -> PN
+ * - PKY-1 -> PKY
+ * - CE0xxxx -> CE
+ * - UB-001 -> UB
+ * - Dent1f3 -> DENT
+ * - "61seat meeting" / "BAWORN MEETING" -> MEETING
  */
+const inferLocationFromName = (name) => {
+  const n = toUpper(name);
+
+  if (!n) return null;
+
+  // meeting keywords (ให้ชนะถ้าชื่อมีคำ meeting จริงๆ)
+  if (n.includes("MEETING") || n.includes("SEAT MEETING")) return "MEETING";
+  if (n.includes("BAWORN")) return "MEETING";
+
+  // zones by prefix / contains pattern
+  if (n.startsWith("ICT")) return "ICT";
+  if (n.startsWith("PN")) return "PN";
+  if (n.startsWith("PKY")) return "PKY";
+  if (n.startsWith("CE")) return "CE";
+  if (n.startsWith("UB")) return "UB";
+  if (n.startsWith("HP")) return "HP";
+
+  // DENT: Dent1f3 / DENTxxx / "DENT ..."
+  if (n.startsWith("DENT") || n.includes("DENT")) return "DENT";
+
+  return null;
+};
+
+/**
+ * ✅ เลือก location:
+ * 1) cfg.location (แหล่งจริง)
+ * 2) dashboard.location
+ * 3) อนุมานจากชื่อ (สำคัญ: แก้ DENT/MEETING นับผิด)
+ *
+ * แต่ถ้า cfg.location เป็น MEETING/ว่าง แล้วชื่อบอกโซนอื่น -> override
+ */
+const pickLocation = ({ cfg, dashItem, mergedName }) => {
+  const cfgLoc = toUpper(cfg?.location);
+  const dashLoc = toUpper(
+    dashItem?.location ?? dashItem?.loc ?? dashItem?.zone ?? ""
+  );
+  const inferred = inferLocationFromName(mergedName);
+
+  // ถ้า cfgLoc ว่าง -> ใช้ inferred/dashLoc
+  if (!cfgLoc) return inferred || (dashLoc ? dashLoc : "MEETING");
+
+  // ถ้า cfgLoc เป็น MEETING แต่ชื่อมันเป็น DENT/ICT/ฯลฯ -> override ให้ถูกโซน
+  if (cfgLoc === "MEETING" && inferred && inferred !== "MEETING") return inferred;
+
+  // ปกติยึด cfgLoc
+  return cfgLoc;
+};
+
+// ===============================
+// ---------- API ----------
+// ===============================
+export const fetchDashboardSummary = async () => {
+  const data = await fetchWithAuth(`${API_BASE_URL}/dashboard/summary`);
+  if (isDebug()) console.log("[/dashboard/summary]", data);
+
+  return {
+    online: toNumOrZero(data?.online),
+    offline: toNumOrZero(data?.offline),
+    total_load_w: toNumOrZero(data?.total_load_w),
+    total_current_a: toNumOrZero(data?.total_current_a),
+  };
+};
+
+export const fetchPDUList = async () => {
+  // 1) realtime
+  const dashboard = await fetchWithAuth(`${API_BASE_URL}/dashboard`);
+
+  // 2) config
+  const pdus = await fetchWithAuth(`${API_BASE_URL}/pdus`);
+  const cfgById = new Map((pdus || []).map((p) => [Number(p.id), p]));
+
+  const merged = (dashboard || []).map((item) => {
+    const cfg = cfgById.get(Number(item.id)) || null;
+
+    const power = pickPowerFromApi(item);
+
+    const isActive =
+      typeof cfg?.is_active === "boolean" ? cfg.is_active : true;
+
+    const mergedName = item?.name ?? cfg?.name ?? "";
+    const mergedIp = item?.ip_address ?? item?.ip ?? cfg?.ip_address ?? cfg?.ip ?? "";
+
+    return {
+      id: item.id,
+      name: mergedName,
+      ip: mergedIp,
+
+      // ✅ แก้ตรงนี้: location จะไม่ไหลไป MEETING ทั้งหมดแล้ว
+      location: pickLocation({ cfg, dashItem: item, mergedName }),
+      is_active: isActive,
+
+      brand: cfg?.brand ?? null,
+      model: cfg?.model ?? null,
+      snmp_version: cfg?.snmp_version ?? null,
+      snmp_port: cfg?.snmp_port ?? null,
+      snmp_community: cfg?.snmp_community ?? null,
+      snmp_timeout_ms: cfg?.snmp_timeout_ms ?? null,
+      snmp_retries: cfg?.snmp_retries ?? null,
+
+      status: normalizeStatus(item),
+      metrics: {
+        current: toNumOrZero(item?.current),
+        voltage: toNumOrZero(item?.voltage),
+        power,
+        hasPower: power !== null,
+      },
+
+      raw: isDebug() ? { dashboard: item, cfg } : undefined,
+    };
+  });
+
+  return merged.filter((x) => x.is_active !== false);
+};
+
+/**
+ * ===============================
+ * Device Detail (RoomView)
+ * GET /api/device/:id
+ * ===============================
+ */
+export const fetchPDUMonitor = async (pduId) => {
+  const data = await fetchWithAuth(`${API_BASE_URL}/device/${pduId}`);
+  return transformMonitorData(data);
+};
+
 const parsePgTimestampAsThai = (ts) => {
   if (!ts) return null;
   let s = String(ts).trim();
-
-  // "YYYY-MM-DD HH:mm:ss.xxx" -> "YYYY-MM-DDTHH:mm:ss.xxx"
   if (s.includes(" ") && !s.includes("T")) s = s.replace(" ", "T");
-
-  // ถ้าไม่มี timezone ต่อท้าย ให้ตีความว่าเป็นเวลาไทย +07:00
-  if (!/[zZ]$/.test(s) && !/[+-]\d{2}:\d{2}$/.test(s)) {
-    s += "+07:00";
-  }
-
+  if (!/[zZ]$/.test(s) && !/[+-]\d{2}:\d{2}$/.test(s)) s += "+07:00";
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
 };
@@ -132,78 +267,6 @@ const formatThaiDateTime = (dateObj) => {
   }).format(dateObj);
 };
 
-/**
- * ===============================
- * Dashboard Summary
- * GET /api/dashboard/summary
- * ===============================
- */
-export const fetchDashboardSummary = async () => {
-  const data = await fetchWithAuth(`${API_BASE_URL}/dashboard/summary`);
-
-  if (isDebug()) console.log("[/dashboard/summary]", data);
-
-  return {
-    online: toNumOrZero(data?.online),
-    offline: toNumOrZero(data?.offline),
-    total_load_w: toNumOrZero(data?.total_load_w),
-    total_current_a: toNumOrZero(data?.total_current_a),
-  };
-};
-
-/**
- * ===============================
- * Dashboard Device List
- * GET /api/dashboard
- * ===============================
- */
-const pickPowerFromApi = (item) => {
-  const candidates = [item?.power, item?.watt, item?.power_w, item?.load_w];
-  for (const v of candidates) {
-    const n = toNumOrNull(v);
-    if (n !== null) return n;
-  }
-  return null;
-};
-
-const normalizeStatus = (item) => {
-  const raw = toUpper(item?.connection_status ?? item?.status);
-  return raw === "ONLINE" ? "online" : "offline";
-};
-
-export const fetchPDUList = async () => {
-  const data = await fetchWithAuth(`${API_BASE_URL}/dashboard`);
-
-  return (data || []).map((item) => {
-    const power = pickPowerFromApi(item);
-
-    return {
-      id: item.id,
-      name: item.name,
-      ip: item.ip_address,
-      status: normalizeStatus(item),
-      metrics: {
-        current: toNumOrZero(item.current),
-        voltage: toNumOrZero(item.voltage),
-        power,
-        hasPower: power !== null,
-      },
-      raw: isDebug() ? item : undefined,
-    };
-  });
-};
-
-/**
- * ===============================
- * Device Detail (RoomView)
- * GET /api/device/:id
- * ===============================
- */
-export const fetchPDUMonitor = async (pduId) => {
-  const data = await fetchWithAuth(`${API_BASE_URL}/device/${pduId}`);
-  return transformMonitorData(data);
-};
-
 const transformMonitorData = (data) => {
   const { info, status, outlets, usage } = data || {};
 
@@ -213,8 +276,6 @@ const transformMonitorData = (data) => {
   };
 
   const statusUpper = toUpper(status?.connection_status ?? status?.status);
-
-  // ✅ lastUpdated จาก status.updated_at (มาจาก VIEW)
   const lastUpdated = formatThaiDateTime(parsePgTimestampAsThai(status?.updated_at));
 
   return {
@@ -229,18 +290,11 @@ const transformMonitorData = (data) => {
     status: {
       isOffline: statusUpper !== "ONLINE",
       uptime: status?.uptime || "-",
-
-      // ของเดิม (ถ้ามี)
       lastSeen: status?.last_seen ? new Date(status.last_seen).toLocaleString() : "-",
-
-      // ✅ ของใหม่
       lastUpdated,
-
       hasAlarm: !!(status?.alarm && status.alarm !== "NORMAL"),
       alarmText: status?.alarm || "NORMAL",
     },
-
-    // ✅ เพิ่ม usage (ไม่กระทบส่วนอื่น)
     usage: usage
       ? {
           isActive: !!usage.is_active,
@@ -250,7 +304,6 @@ const transformMonitorData = (data) => {
           lastCurrent: usage.last_current ?? null,
         }
       : null,
-
     metrics: {
       current: formatNum(status?.current, 2),
       power: formatNum(status?.power, 1),
@@ -258,13 +311,8 @@ const transformMonitorData = (data) => {
       temperature: formatNum(status?.temperature, 1),
       energy: formatNum(status?.energy, 2),
       loadBar: {
-        percent: status?.current
-          ? Math.min((Number(status.current) / 20) * 100, 100)
-          : 0,
-        color:
-          Number(status?.current) > 16
-            ? "var(--status-critical)"
-            : "var(--status-online)",
+        percent: status?.current ? Math.min((Number(status.current) / 20) * 100, 100) : 0,
+        color: Number(status?.current) > 16 ? "var(--status-critical)" : "var(--status-online)",
       },
     },
     outlets: (outlets || []).map((o) => ({
@@ -276,14 +324,16 @@ const transformMonitorData = (data) => {
   };
 };
 
-/**
- * ===============================
- * Device History (Chart)
- * GET /api/history/device/:id
- * ===============================
- */
 export const getDeviceHistory = (id, start, end) => {
   return axios.get(`${API_BASE_URL}/history/device/${id}`, {
     params: { start, end },
+  });
+};
+
+export const createPDU = async (payload) => {
+  return fetchWithAuth(`${API_BASE_URL}/pdus`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 };
