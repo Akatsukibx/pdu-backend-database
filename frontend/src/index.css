@@ -603,3 +603,101 @@ h2.page-title {
   height:18px;
   accent-color: var(--accent-blue);
 }
+.pdu-checkbox {
+  height: 42px;                 /* ✅ สูงเท่าช่อง input */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.pdu-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-blue);  /* ✅ เล็กพอดี */
+}
+
+.pdu-checkbox-text {
+  color: var(--text-primary);
+  opacity: 0.9;
+  font-size: 0.95rem;
+}
+/* ===== Add PDU page layout ===== */
+.add-pdu-page {
+  height: 100%;
+  padding: 2rem;
+  overflow: auto;
+}
+
+.add-pdu-shell {
+  width: 100%;
+  max-width: 1200px;          /* ✅ จอกว้างแล้วฟอร์มขยาย */
+  margin: 0 auto;             /* ✅ อยู่กลาง */
+  display: flex;
+  justify-content: center;
+}
+
+/* panel เดิมของคุณให้มันยืดได้ตามจอ */
+.add-pdu-panel {
+  width: 100%;
+  max-width: 980px;           /* ✅ ขยายจาก 900 -> 980 */
+  background: var(--bg-panel);
+  border: 1px solid var(--border-main);
+  border-radius: 10px;
+  padding: 2rem;
+}
+
+/* ฟอร์ม: จอกว้าง = 2 คอลัมน์ / จอเล็ก = 1 คอลัมน์ */
+.add-pdu-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem 1.5rem;
+}
+
+/* ให้บางช่องกินเต็มแถวได้ */
+.form-group.full {
+  grid-column: 1 / -1;
+}
+
+/* inputs theme ให้เข้ากับ dark */
+.form-group input,
+.form-group select {
+  height: 42px;
+  padding: 0 0.9rem;
+  background: #1f232a;
+  color: var(--text-primary);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  outline: none;
+  font-size: 0.95rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-group input::placeholder {
+  color: rgba(230, 238, 245, 0.35);
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  border-color: rgba(52, 152, 219, 0.7);
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.15);
+}
+
+.add-pdu-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+/* ✅ responsive: จอเล็กให้เป็น 1 คอลัมน์ + ลด padding */
+@media (max-width: 900px) {
+  .add-pdu-page { padding: 1.25rem; }
+  .add-pdu-panel { padding: 1.25rem; }
+  .add-pdu-form { grid-template-columns: 1fr; }
+  .add-pdu-actions { justify-content: stretch; }
+  .btn-primary, .btn-secondary { width: 100%; }
+}
