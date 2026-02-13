@@ -16,6 +16,40 @@ function toInt(v, fallback) {
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
 
+/**
+ * ลบ PDU (และข้อมูลลูก) แบบ "hard delete" ตาม id หลายตัว
+ * - ลบ status_current/history, outlet_status_current/history, outlets, usage_sessions ก่อน
+ * - แล้วค่อยลบ pdu_devices
+ */
+async function hardDeletePdusByIds(client, ids) {
+  const uniq = Array.from(new Set((ids || []).map((x) => Number(x)).filter((x) => Number.isFinite(x))));
+  if (uniq.length === 0) return 0;
+
+  // ลบข้อมูลลูกก่อน เพื่อกัน FK error
+  await client.query(`DELETE FROM public.pdu_outlet_status_history WHERE outlet_id IN (
+    SELECT id FROM public.pdu_outlets WHERE pdu_id = ANY($1::int[])
+  )`, [uniq]);
+
+  await client.query(`DELETE FROM public.pdu_outlet_status_current WHERE outlet_id IN (
+    SELECT id FROM public.pdu_outlets WHERE pdu_id = ANY($1::int[])
+  )`, [uniq]);
+
+  await client.query(`DELETE FROM public.pdu_outlets WHERE pdu_id = ANY($1::int[])`, [uniq]);
+
+  await client.query(`DELETE FROM public.pdu_status_history WHERE pdu_id = ANY($1::int[])`, [uniq]);
+  await client.query(`DELETE FROM public.pdu_status_current WHERE pdu_id = ANY($1::int[])`, [uniq]);
+
+  // ถ้าคุณใช้ตารางนี้อยู่
+  try {
+    await client.query(`DELETE FROM public.pdu_usage_sessions WHERE pdu_id = ANY($1::int[])`, [uniq]);
+  } catch {
+    // ถ้าไม่มีตารางนี้ ไม่ต้องล้ม
+  }
+
+  const del = await client.query(`DELETE FROM public.pdu_devices WHERE id = ANY($1::int[])`, [uniq]);
+  return del.rowCount || 0;
+}
+
 // ===============================
 // ✅ 0) PDU Management APIs
 // ===============================
@@ -54,8 +88,10 @@ exports.listPDUs = async (req, res) => {
 /**
  * POST /api/pdus
  * - เพิ่ม PDU ใหม่ลง DB
+ * ✅ ปรับ: ถ้ามี name หรือ ip ซ้ำอยู่แล้ว -> ทำเป็น UPDATE แถวเดิม (ไม่สร้างแถวใหม่)
  */
 exports.createPDU = async (req, res) => {
+  const client = await pool.connect();
   try {
     const body = req.body || {};
 
@@ -82,7 +118,72 @@ exports.createPDU = async (req, res) => {
       return res.status(400).json({ error: "snmp_community is required for SNMP v2c" });
     }
 
-    const q = `
+    await client.query("BEGIN");
+
+    // ✅ ถ้ามี record เดิมที่ name หรือ ip ซ้ำ -> อัปเดต record นั้นแทน insert
+    const findQ = `
+      SELECT id
+      FROM public.pdu_devices
+      WHERE name = $1
+         OR ip_address = $2::inet
+      ORDER BY id ASC
+      LIMIT 1
+    `;
+    const found = await client.query(findQ, [name, ip_address]);
+
+    if (found.rows.length > 0) {
+      const existingId = found.rows[0].id;
+
+      const updQ = `
+        UPDATE public.pdu_devices
+        SET
+          name = $2,
+          ip_address = $3::inet,
+          brand = $4,
+          model = $5,
+          location = $6,
+          snmp_version = $7,
+          snmp_port = $8,
+          snmp_community = $9,
+          snmp_timeout_ms = $10,
+          snmp_retries = $11,
+          is_active = $12
+        WHERE id = $1
+        RETURNING
+          id,
+          name,
+          split_part(ip_address::text,'/',1) AS ip_address,
+          brand,
+          model,
+          location,
+          snmp_version,
+          snmp_port,
+          snmp_community,
+          snmp_timeout_ms,
+          snmp_retries,
+          is_active;
+      `;
+      const { rows } = await client.query(updQ, [
+        existingId,
+        name,
+        ip_address,
+        brand,
+        model,
+        location,
+        snmp_version,
+        snmp_port,
+        snmp_community,
+        snmp_timeout_ms,
+        snmp_retries,
+        Boolean(is_active),
+      ]);
+
+      await client.query("COMMIT");
+      return res.status(200).json(rows[0]);
+    }
+
+    // ✅ ไม่มีซ้ำ -> insert ปกติ
+    const insQ = `
       INSERT INTO public.pdu_devices
       (name, ip_address, brand, model, location,
        snmp_version, snmp_port, snmp_community,
@@ -106,7 +207,7 @@ exports.createPDU = async (req, res) => {
         is_active;
     `;
 
-    const params = [
+    const { rows } = await client.query(insQ, [
       name,
       ip_address,
       brand,
@@ -118,25 +219,25 @@ exports.createPDU = async (req, res) => {
       snmp_timeout_ms,
       snmp_retries,
       Boolean(is_active),
-    ];
+    ]);
 
-    const { rows } = await pool.query(q, params);
+    await client.query("COMMIT");
     res.status(201).json(rows[0]);
   } catch (err) {
-    // ถ้าคุณทำ UNIQUE(ip_address) แล้ว จะชนตรงนี้
-    if (err && err.code === "23505") {
-      return res.status(409).json({ error: "duplicate key (maybe ip_address already exists)" });
-    }
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("[createPDU]", err);
     res.status(500).json({ error: "Database error" });
+  } finally {
+    client.release();
   }
 };
 
 /**
  * PUT /api/pdus/:id
  * - แก้ไข PDU (แก้บาง field ได้)
- * ✅ ปรับเพิ่ม: ถ้าเปลี่ยน name หรือ ip -> ล้างข้อมูลสถานะเก่าที่ทำให้ dashboard ค้าง
- * ✅ วิธี A: ถ้ามีการเปลี่ยน ip_address -> เคลียร์ record อื่นที่ใช้ ip นี้ก่อน แล้วค่อย UPDATE
+ * ✅ ปรับตามที่คุณต้องการ:
+ *   - ถ้าเปลี่ยน name หรือ ip -> ลบ “แถวอื่น” ที่เป็นของเก่า/ซ้ำ ทั้ง old และ new ทันที
+ *   - ลบข้อมูลลูกด้วย (status/outlet/history/usage) เพื่อไม่ให้โผล่บน dashboard
  */
 exports.updatePDU = async (req, res) => {
   const { id } = req.params;
@@ -145,40 +246,23 @@ exports.updatePDU = async (req, res) => {
   try {
     const body = req.body || {};
 
-    // ถ้าไม่ส่งมา = null เพื่อให้ COALESCE ใช้ของเดิม
     const name = body.name != null ? String(body.name).trim() : null;
     const ip_address = body.ip_address != null ? cleanIp(body.ip_address) : null;
 
     const brand = body.brand != null ? String(body.brand).trim().toUpperCase() : null;
     const model = body.model != null ? String(body.model).trim() : null;
-
-    // ถ้าไม่ส่ง location มา ให้ COALESCE ใช้ของเดิม
-    // ถ้าต้องการเคลียร์ให้เป็น NULL ต้องส่ง location = null มาจริง ๆ
     const location = body.location !== undefined ? body.location : null;
 
-    const snmp_version =
-      body.snmp_version != null ? String(body.snmp_version).toLowerCase() : null;
-
+    const snmp_version = body.snmp_version != null ? String(body.snmp_version).toLowerCase() : null;
     const snmp_port = body.snmp_port != null ? toInt(body.snmp_port, 161) : null;
     const snmp_community = body.snmp_community !== undefined ? body.snmp_community : null;
-
-    const snmp_timeout_ms =
-      body.snmp_timeout_ms != null ? toInt(body.snmp_timeout_ms, 2000) : null;
-
-    const snmp_retries =
-      body.snmp_retries != null ? toInt(body.snmp_retries, 1) : null;
-
+    const snmp_timeout_ms = body.snmp_timeout_ms != null ? toInt(body.snmp_timeout_ms, 2000) : null;
+    const snmp_retries = body.snmp_retries != null ? toInt(body.snmp_retries, 1) : null;
     const is_active = typeof body.is_active === "boolean" ? body.is_active : null;
 
-    // ------------------------------
-    // 1) ดึงค่าปัจจุบัน (เช็ค v2c + เช็คว่า name/ip เปลี่ยนไหม)
-    // ------------------------------
+    // 1) อ่านค่าปัจจุบัน (ต้องเอา oldName/oldIp ไปใช้ลบของเก่า)
     const currentQ = `
-      SELECT
-        name,
-        split_part(ip_address::text,'/',1) AS ip_address,
-        snmp_version,
-        snmp_community
+      SELECT id, name, ip_address, snmp_version, snmp_community
       FROM public.pdu_devices
       WHERE id = $1
       LIMIT 1
@@ -188,9 +272,14 @@ exports.updatePDU = async (req, res) => {
       return res.status(404).json({ error: "PDU not found" });
     }
 
-    const curName = String(current.rows[0].name || "");
-    const curIp = String(current.rows[0].ip_address || "");
+    const oldName = String(current.rows[0].name || "").trim();
+    const oldIpText = current.rows[0].ip_address ? String(current.rows[0].ip_address) : "";
+    const oldIp = cleanIp(oldIpText);
 
+    const newName = name ?? oldName;
+    const newIp = ip_address ?? oldIp;
+
+    // validate snmp community when v2c
     const finalVersion = (snmp_version ?? current.rows[0].snmp_version ?? "2c").toLowerCase();
     const finalCommunity = snmp_community ?? current.rows[0].snmp_community;
 
@@ -198,31 +287,31 @@ exports.updatePDU = async (req, res) => {
       return res.status(400).json({ error: "snmp_community is required for SNMP v2c" });
     }
 
-    // ✅ เช็คว่ามีการเปลี่ยน name/ip จริงไหม
-    const willChangeName = name != null && String(name) !== curName;
-    const willChangeIp = ip_address != null && String(ip_address) !== curIp;
-    const shouldResetStatus = willChangeName || willChangeIp;
-
-    // ------------------------------
-    // 2) Transaction
-    // ------------------------------
     await client.query("BEGIN");
 
-    // ✅ เคลียร์ record อื่นที่ใช้ ip นี้ (กัน UNIQUE ip_address ชน)
-    if (ip_address) {
-      await client.query(
-        `
-        DELETE FROM public.pdu_devices
-        WHERE ip_address = $1::inet
-          AND id <> $2
-        `,
-        [ip_address, id]
-      );
+    // 2) หา “แถวอื่น” ที่เป็นของเก่า/ซ้ำ แล้วลบทิ้งทันที
+    // - ของเก่า: oldName / oldIp
+    // - ของใหม่: newName / newIp (กันชน unique/กันข้อมูลซ้ำ)
+    const victimsQ = `
+      SELECT id
+      FROM public.pdu_devices
+      WHERE id <> $1
+        AND (
+          name = $2
+          OR name = $3
+          OR ip_address = $4::inet
+          OR ip_address = $5::inet
+        )
+    `;
+
+    const victims = await client.query(victimsQ, [id, oldName, newName, oldIp || "0.0.0.0", newIp || "0.0.0.0"]);
+    const victimIds = victims.rows.map((r) => r.id);
+
+    if (victimIds.length > 0) {
+      await hardDeletePdusByIds(client, victimIds);
     }
 
-    // ------------------------------
-    // 3) UPDATE แถวเดิม
-    // ------------------------------
+    // 3) อัปเดตแถวหลัก (id เดิม)
     const q = `
       UPDATE public.pdu_devices
       SET
@@ -270,48 +359,10 @@ exports.updatePDU = async (req, res) => {
 
     const { rows } = await client.query(q, params);
 
-    // ------------------------------
-    // ✅ 4) ถ้าเปลี่ยน name/ip -> ล้างข้อมูลสถานะเก่า ไม่ให้ dashboard แสดงค้าง
-    // ------------------------------
-    if (shouldResetStatus) {
-      // ลบสถานะปัจจุบันของเครื่องนี้
-      await client.query(`DELETE FROM public.pdu_status_current WHERE pdu_id = $1`, [id]);
-
-      // ลบ outlet current ของเครื่องนี้ (join ผ่าน pdu_outlets)
-      await client.query(
-        `
-        DELETE FROM public.pdu_outlet_status_current s
-        USING public.pdu_outlets o
-        WHERE s.outlet_id = o.id
-          AND o.pdu_id = $1
-        `,
-        [id]
-      );
-
-      // ถ้าต้องการล้างประวัติด้วย (ข้อมูลหายถาวร) ให้เปิดบรรทัดนี้:
-      // await client.query(`DELETE FROM public.pdu_status_history WHERE pdu_id = $1`, [id]);
-      // await client.query(
-      //   `
-      //   DELETE FROM public.pdu_outlet_status_history h
-      //   USING public.pdu_outlets o
-      //   WHERE h.outlet_id = o.id
-      //     AND o.pdu_id = $1
-      //   `,
-      //   [id]
-      // );
-      // await client.query(`DELETE FROM public.pdu_usage_sessions WHERE pdu_id = $1`, [id]);
-    }
-
     await client.query("COMMIT");
     res.json(rows[0]);
   } catch (err) {
-    try {
-      await client.query("ROLLBACK");
-    } catch {}
-
-    if (err && err.code === "23505") {
-      return res.status(409).json({ error: "duplicate key (maybe ip_address already exists)" });
-    }
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("[updatePDU]", err);
     res.status(500).json({ error: "Database error" });
   } finally {

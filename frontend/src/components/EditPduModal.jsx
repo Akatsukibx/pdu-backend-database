@@ -1,6 +1,7 @@
+// EditPduModal.jsx
 import React, { useMemo, useState, useEffect } from "react";
-import { updatePDU } from "../api/pduService";
 
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const ZONES = ["ICT", "PN", "PKY", "CE", "UB", "HP", "DENT", "MEETING"];
 
 function normalizeUpper(v) {
@@ -17,6 +18,19 @@ function isValidIPv4(ip) {
     if (n < 0 || n > 255) return false;
   }
   return true;
+}
+
+async function safeReadError(res) {
+  try {
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const j = await res.json();
+      return j?.error || j?.message || "";
+    }
+    return await res.text();
+  } catch {
+    return "";
+  }
 }
 
 export default function EditPduModal({ open, pdu, onClose, onSaved }) {
@@ -38,7 +52,6 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // reset เมื่อเปลี่ยน pdu
   useEffect(() => setForm(initial), [initial]);
 
   if (!open || !pdu || !form) return null;
@@ -48,19 +61,24 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
   const submit = async () => {
     setMsg("");
 
+    const token = localStorage.getItem("pdu_token");
+    if (!token) return setMsg("❌ ไม่พบ token กรุณา Login ใหม่");
+
     const name = String(form.name || "").trim();
     const ip = String(form.ip_address || "").trim();
+    const location = normalizeUpper(form.location || "MEETING");
 
     if (!name) return setMsg("❌ กรุณาใส่ Name");
     if (!ip) return setMsg("❌ กรุณาใส่ IP Address");
     if (!isValidIPv4(ip)) return setMsg("❌ IP Address ไม่ถูกต้อง (IPv4)");
+    if (!ZONES.includes(location)) return setMsg("❌ Location ไม่ถูกต้อง");
 
     setSaving(true);
     try {
       const payload = {
         name,
         ip_address: ip,
-        location: normalizeUpper(form.location),
+        location,
         brand: normalizeUpper(form.brand),
         model: normalizeUpper(form.model),
         snmp_version: String(form.snmp_version || "2c"),
@@ -68,10 +86,23 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
         is_active: !!form.is_active,
       };
 
-      await updatePDU(pdu.id, payload);
+      // ✅ ใช้ PUT แบบเดียวกับ DashboardView
+      const res = await fetch(`${API_BASE}/api/pdus/${pdu.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errMsg = await safeReadError(res);
+        throw new Error(errMsg || `Update failed (${res.status})`);
+      }
 
       setMsg("✅ บันทึกสำเร็จ");
-      onSaved?.();
+      await onSaved?.();
       onClose?.();
     } catch (e) {
       setMsg(`❌ บันทึกไม่สำเร็จ: ${e?.message || "Unknown error"}`);
@@ -90,16 +121,13 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
           </button>
         </div>
 
-        {/* ✅ ทำ layout ให้เหมือนหน้า Add PDU: 2 คอลัมน์ */}
         <div style={styles.body}>
-          {/* Row 1 */}
           <div style={styles.row}>
             <label style={styles.label}>Name</label>
             <input
               style={styles.input}
               value={form.name}
               onChange={(e) => set("name", e.target.value)}
-              placeholder="เช่น CE-07102-55"
             />
           </div>
 
@@ -109,11 +137,9 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
               style={styles.input}
               value={form.ip_address}
               onChange={(e) => set("ip_address", e.target.value)}
-              placeholder="เช่น 10.220.9.xxx"
             />
           </div>
 
-          {/* Row 2 */}
           <div style={styles.row}>
             <label style={styles.label}>Zone (Location)</label>
             <select
@@ -129,7 +155,6 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
             </select>
           </div>
 
-          {/* ✅ Active แบบ dropdown (กดง่าย + อยู่ระนาบเดียวกัน) */}
           <div style={styles.row}>
             <label style={styles.label}>Active</label>
             <select
@@ -142,7 +167,6 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
             </select>
           </div>
 
-          {/* Row 3 */}
           <div style={styles.row}>
             <label style={styles.label}>Brand</label>
             <input
@@ -161,7 +185,6 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
             />
           </div>
 
-          {/* Row 4 */}
           <div style={styles.row}>
             <label style={styles.label}>SNMP Version</label>
             <select
@@ -180,11 +203,9 @@ export default function EditPduModal({ open, pdu, onClose, onSaved }) {
               style={styles.input}
               value={form.snmp_community}
               onChange={(e) => set("snmp_community", e.target.value)}
-              placeholder="administrator / public"
             />
           </div>
 
-          {/* ✅ msg เต็มแถว */}
           {msg && <div style={styles.msgFull}>{msg}</div>}
         </div>
 
@@ -233,8 +254,6 @@ const styles = {
     cursor: "pointer",
     fontSize: 18,
   },
-
-  // ✅ 2 คอลัมน์เหมือนหน้า Add PDU
   body: {
     padding: 14,
     display: "grid",
@@ -242,10 +261,8 @@ const styles = {
     gap: 10,
     columnGap: 12,
   },
-
   row: { display: "grid", gap: 6 },
   label: { fontSize: 12, opacity: 0.8 },
-
   input: {
     padding: "10px 12px",
     borderRadius: 10,
@@ -254,15 +271,12 @@ const styles = {
     color: "var(--text-primary)",
     outline: "none",
   },
-
-  // ✅ ข้อความแจ้งเตือนเต็มแถว
   msgFull: {
     gridColumn: "1 / -1",
     padding: "8px 10px",
     borderRadius: 10,
     background: "rgba(255,255,255,0.06)",
   },
-
   footer: {
     padding: 14,
     display: "flex",
