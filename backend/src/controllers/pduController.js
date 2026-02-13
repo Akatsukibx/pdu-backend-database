@@ -135,9 +135,12 @@ exports.createPDU = async (req, res) => {
 /**
  * PUT /api/pdus/:id
  * - แก้ไข PDU (แก้บาง field ได้)
+ * ✅ ปรับเพิ่ม: ถ้าเปลี่ยน name หรือ ip -> ล้างข้อมูลสถานะเก่าที่ทำให้ dashboard ค้าง
+ * ✅ วิธี A: ถ้ามีการเปลี่ยน ip_address -> เคลียร์ record อื่นที่ใช้ ip นี้ก่อน แล้วค่อย UPDATE
  */
 exports.updatePDU = async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
 
   try {
     const body = req.body || {};
@@ -146,18 +149,18 @@ exports.updatePDU = async (req, res) => {
     const name = body.name != null ? String(body.name).trim() : null;
     const ip_address = body.ip_address != null ? cleanIp(body.ip_address) : null;
 
-    const brand =
-      body.brand != null ? String(body.brand).trim().toUpperCase() : null;
-
+    const brand = body.brand != null ? String(body.brand).trim().toUpperCase() : null;
     const model = body.model != null ? String(body.model).trim() : null;
+
+    // ถ้าไม่ส่ง location มา ให้ COALESCE ใช้ของเดิม
+    // ถ้าต้องการเคลียร์ให้เป็น NULL ต้องส่ง location = null มาจริง ๆ
     const location = body.location !== undefined ? body.location : null;
 
     const snmp_version =
       body.snmp_version != null ? String(body.snmp_version).toLowerCase() : null;
 
     const snmp_port = body.snmp_port != null ? toInt(body.snmp_port, 161) : null;
-    const snmp_community =
-      body.snmp_community !== undefined ? body.snmp_community : null;
+    const snmp_community = body.snmp_community !== undefined ? body.snmp_community : null;
 
     const snmp_timeout_ms =
       body.snmp_timeout_ms != null ? toInt(body.snmp_timeout_ms, 2000) : null;
@@ -165,21 +168,28 @@ exports.updatePDU = async (req, res) => {
     const snmp_retries =
       body.snmp_retries != null ? toInt(body.snmp_retries, 1) : null;
 
-    const is_active =
-      typeof body.is_active === "boolean" ? body.is_active : null;
+    const is_active = typeof body.is_active === "boolean" ? body.is_active : null;
 
-    // ถ้าจะตั้งเป็น v2c ต้องมี community (ทั้งของใหม่หรือของเดิม)
-    // ทำแบบปลอดภัย: เช็คค่าปัจจุบันก่อน
+    // ------------------------------
+    // 1) ดึงค่าปัจจุบัน (เช็ค v2c + เช็คว่า name/ip เปลี่ยนไหม)
+    // ------------------------------
     const currentQ = `
-      SELECT snmp_version, snmp_community
+      SELECT
+        name,
+        split_part(ip_address::text,'/',1) AS ip_address,
+        snmp_version,
+        snmp_community
       FROM public.pdu_devices
       WHERE id = $1
       LIMIT 1
     `;
-    const current = await pool.query(currentQ, [id]);
+    const current = await client.query(currentQ, [id]);
     if (current.rows.length === 0) {
       return res.status(404).json({ error: "PDU not found" });
     }
+
+    const curName = String(current.rows[0].name || "");
+    const curIp = String(current.rows[0].ip_address || "");
 
     const finalVersion = (snmp_version ?? current.rows[0].snmp_version ?? "2c").toLowerCase();
     const finalCommunity = snmp_community ?? current.rows[0].snmp_community;
@@ -188,6 +198,31 @@ exports.updatePDU = async (req, res) => {
       return res.status(400).json({ error: "snmp_community is required for SNMP v2c" });
     }
 
+    // ✅ เช็คว่ามีการเปลี่ยน name/ip จริงไหม
+    const willChangeName = name != null && String(name) !== curName;
+    const willChangeIp = ip_address != null && String(ip_address) !== curIp;
+    const shouldResetStatus = willChangeName || willChangeIp;
+
+    // ------------------------------
+    // 2) Transaction
+    // ------------------------------
+    await client.query("BEGIN");
+
+    // ✅ เคลียร์ record อื่นที่ใช้ ip นี้ (กัน UNIQUE ip_address ชน)
+    if (ip_address) {
+      await client.query(
+        `
+        DELETE FROM public.pdu_devices
+        WHERE ip_address = $1::inet
+          AND id <> $2
+        `,
+        [ip_address, id]
+      );
+    }
+
+    // ------------------------------
+    // 3) UPDATE แถวเดิม
+    // ------------------------------
     const q = `
       UPDATE public.pdu_devices
       SET
@@ -233,14 +268,54 @@ exports.updatePDU = async (req, res) => {
       is_active,
     ];
 
-    const { rows } = await pool.query(q, params);
+    const { rows } = await client.query(q, params);
+
+    // ------------------------------
+    // ✅ 4) ถ้าเปลี่ยน name/ip -> ล้างข้อมูลสถานะเก่า ไม่ให้ dashboard แสดงค้าง
+    // ------------------------------
+    if (shouldResetStatus) {
+      // ลบสถานะปัจจุบันของเครื่องนี้
+      await client.query(`DELETE FROM public.pdu_status_current WHERE pdu_id = $1`, [id]);
+
+      // ลบ outlet current ของเครื่องนี้ (join ผ่าน pdu_outlets)
+      await client.query(
+        `
+        DELETE FROM public.pdu_outlet_status_current s
+        USING public.pdu_outlets o
+        WHERE s.outlet_id = o.id
+          AND o.pdu_id = $1
+        `,
+        [id]
+      );
+
+      // ถ้าต้องการล้างประวัติด้วย (ข้อมูลหายถาวร) ให้เปิดบรรทัดนี้:
+      // await client.query(`DELETE FROM public.pdu_status_history WHERE pdu_id = $1`, [id]);
+      // await client.query(
+      //   `
+      //   DELETE FROM public.pdu_outlet_status_history h
+      //   USING public.pdu_outlets o
+      //   WHERE h.outlet_id = o.id
+      //     AND o.pdu_id = $1
+      //   `,
+      //   [id]
+      // );
+      // await client.query(`DELETE FROM public.pdu_usage_sessions WHERE pdu_id = $1`, [id]);
+    }
+
+    await client.query("COMMIT");
     res.json(rows[0]);
   } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+
     if (err && err.code === "23505") {
       return res.status(409).json({ error: "duplicate key (maybe ip_address already exists)" });
     }
     console.error("[updatePDU]", err);
     res.status(500).json({ error: "Database error" });
+  } finally {
+    client.release();
   }
 };
 
@@ -399,8 +474,7 @@ exports.getDeviceHistory = async (req, res) => {
   const { id } = req.params;
   const { start, end } = req.query;
 
-  const startDate =
-    start || moment().subtract(24, "hours").format("YYYY-MM-DD HH:mm:ss");
+  const startDate = start || moment().subtract(24, "hours").format("YYYY-MM-DD HH:mm:ss");
   const endDate = end || moment().format("YYYY-MM-DD HH:mm:ss");
 
   try {
