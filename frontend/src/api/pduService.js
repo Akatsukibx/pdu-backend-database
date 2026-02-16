@@ -167,6 +167,15 @@ const pickLocation = ({ cfg, dashItem, mergedName }) => {
   return cfgLoc;
 };
 
+/**
+ * ✅ default community ตาม brand (ใช้ตอน info.snmp_community ว่าง/ไม่มี)
+ */
+const defaultCommunityByBrand = (brand) => {
+  const b = toUpper(brand);
+  if (b === "ATEN") return "administrator";
+  return "public"; // CYBERPOWER, APC, อื่นๆ
+};
+
 // ===============================
 // ---------- API ----------
 // ===============================
@@ -278,6 +287,12 @@ const transformMonitorData = (data) => {
   const statusUpper = toUpper(status?.connection_status ?? status?.status);
   const lastUpdated = formatThaiDateTime(parsePgTimestampAsThai(status?.updated_at));
 
+  // ✅ FIX: ใส่ค่า config ที่จำเป็นให้ RoomView/Edit ใช้งาน
+  const brand = info?.brand ?? null;
+  const snmpCommunity =
+    (info?.snmp_community && String(info.snmp_community).trim()) ||
+    defaultCommunityByBrand(brand);
+
   return {
     id: info?.id,
     info: {
@@ -285,8 +300,21 @@ const transformMonitorData = (data) => {
       location: info?.location,
       model: info?.model,
       ip: info?.ip_address,
+      ip_address: info?.ip_address,
       deviceUrl: info?.ip_address ? `http://${info.ip_address}` : "",
+
+      // ✅ เพิ่มให้ modal edit อ่านได้
+      brand,
+      snmp_version: info?.snmp_version ?? "2c",
+      snmp_community: snmpCommunity,
+      is_active: typeof info?.is_active === "boolean" ? info.is_active : true,
+
+      // (เผื่อใช้ต่อ)
+      snmp_port: info?.snmp_port ?? 161,
+      snmp_timeout_ms: info?.snmp_timeout_ms ?? 2000,
+      snmp_retries: info?.snmp_retries ?? 1,
     },
+
     status: {
       isOffline: statusUpper !== "ONLINE",
       uptime: status?.uptime || "-",
@@ -295,6 +323,7 @@ const transformMonitorData = (data) => {
       hasAlarm: !!(status?.alarm && status.alarm !== "NORMAL"),
       alarmText: status?.alarm || "NORMAL",
     },
+
     usage: usage
       ? {
           isActive: !!usage.is_active,
@@ -304,6 +333,7 @@ const transformMonitorData = (data) => {
           lastCurrent: usage.last_current ?? null,
         }
       : null,
+
     metrics: {
       current: formatNum(status?.current, 2),
       power: formatNum(status?.power, 1),
@@ -315,6 +345,7 @@ const transformMonitorData = (data) => {
         color: Number(status?.current) > 16 ? "var(--status-critical)" : "var(--status-online)",
       },
     },
+
     outlets: (outlets || []).map((o) => ({
       id: o.outlet_no,
       name: o.name,
