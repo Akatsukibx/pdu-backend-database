@@ -1,0 +1,23 @@
+//คำสั่งลบตัว PDU ใน database บน server
+1. เข้าเครื่องเซิร์ฟเวอร์ 
+ssh admin1@10.204.10.209
+
+2. เข้า psql (ใช้ user postgres)
+sudo -u postgres psql -d pdu_monitor
+
+3. เช็คว่ามี id นั้นอยู่ในฐานข้อมูลไหม
+SELECT id, name, ip_address, location
+FROM public.pdu_devices
+WHERE id = 163173;
+
+4. รันคำสั่งลบได้เลย
+DELETE FROM public.pdu_outlet_status_history WHERE pdu_id = 164661;
+DELETE FROM public.pdu_outlet_status_current WHERE pdu_id = 164661;
+DELETE FROM public.pdu_outlets WHERE pdu_id = 164661;
+DELETE FROM public.pdu_status_history WHERE pdu_id = 164661;
+DELETE FROM public.pdu_status_current WHERE pdu_id = 164661;
+DELETE FROM public.pdu_devices
+WHERE id = 164661;
+
+//หมายเหตุ ต้องไปเช็ค id ของ PDU นั้นก่อนว่า id อะไรจากนั้นให้เปลี่ยนเป็น id ของตัวที่ลบทั้งหมด
+//id จะมีแสดงที่หน้าเว็บ ตัวอย่าง DEVICE: ICT1104/1 (1) เลขใน()คือ id
