@@ -1,8 +1,7 @@
 //ที่ติดตั้งเพิ่มเมื่อวันที่ 4 กุมภา
 
 //backend
-npm install bcrypt
-npm install jsonwebtoken
+npm install
 
 //frontend
-npm install axios
+npm install
